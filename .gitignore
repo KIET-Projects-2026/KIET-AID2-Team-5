@@ -1,49 +1,116 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# Virtual environment folder
+# Virtual Environment
 venv/
 env/
 ENV/
-.venv/
+env.bak/
+venv.bak/
 
-# IDE/editor files
+# IDEs
 .vscode/
 .idea/
-*.sublime-workspace
-*.sublime-project
-
-# Streamlit state and cache
-.streamlit/
-
-# Jupyter Notebook checkpoints
-.ipynb_checkpoints/
-
-# Environment variables and secrets
-.env
-.env.*
-
-# OS-specific files
+*.swp
+*.swo
+*~
 .DS_Store
-Thumbs.db
 
-# Log files
-*.log
+# Jupyter Notebook
+.ipynb_checkpoints
 
-# Output and build files
-output/
+# Environment variables
+.env
+.env.local
+
+# YOLO Models (large files)
+*.pt
+*.onnx
+*.engine
+*.weights
+
+# Data directories
+data/violations/*.jpg
+data/violations/*.png
+data/logs/*.log
+data/output/*.mp4
+data/output/*.avi
+data/output_videos/*.mp4
+data/uploads/*.mp4
+data/uploads/*.avi
+
+# Keep directory structure but ignore contents
+!data/violations/.gitkeep
+!data/logs/.gitkeep
+!data/output/.gitkeep
+!data/output_videos/.gitkeep
+!data/uploads/.gitkeep
+
+# Video files
 *.mp4
-*.wav
-*.mp3
+*.avi
+*.mov
+*.mkv
+*.flv
+*.wmv
 
-temp/
-build/
-dist/
-# Installer logs
-pip-log.txt
+# Image files (except examples)
+*.jpg
+*.jpeg
+*.png
+!example*.jpg
+!example*.png
 
-# Dependency files for pipenv and poetry
-Pipfile.lock
-poetry.lock
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
+# Uploaded videos
+data/uploads/*.mp4
+data/uploads/*.avi
+data/uploads/*.mov
+data/uploads/*.mkv
+data/uploads/youtube/*
+!data/uploads/.gitkeep
+
+# Temporary YouTube downloads
+data/temp_videos/*
+!data/temp_videos/.gitkeep

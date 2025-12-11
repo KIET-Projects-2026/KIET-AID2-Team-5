@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PTU Traffic Monitoring System - Dashboard</title>
+    <link rel="stylesheet" href="./styles.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Navigation Bar -->
+    <nav class="navbar">
+        <div class="navbar-container">
+            <div class="navbar-brand">
+                <div class="logo">
+                    <i class="fas fa-traffic-light"></i>
+                    <span>PTU</span>
+                </div>
+                <span class="brand-text">Pune Traffic Updates</span>
+            </div>
+            <div class="navbar-menu">
+                <a href="#home" class="nav-link active" data-page="home">
+                    <i class="fas fa-home"></i> Home
+                </a>
+                <a href="#about" class="nav-link" data-page="about">
+                    <i class="fas fa-info-circle"></i> About
+                </a>
+                <a href="#monitoring" class="nav-link" data-page="monitoring">
+                    <i class="fas fa-video"></i> Monitoring
+                </a>
+                <a href="#violations" class="nav-link" data-page="violations">
+                    <i class="fas fa-exclamation-triangle"></i> Violations
+                </a>
+            </div>
+            <div class="navbar-actions">
+                <button class="notification-btn">
+                    <i class="fas fa-bell"></i>
+                    <span class="badge" id="notificationBadge">0</span>
+                </button>
+                <div class="user-menu">
+                    <img src="https://ui-avatars.com/api/?name=Admin&background=5F3DC4&color=fff" alt="User">
+                    <span>Account</span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h3>Navigation</h3>
+            <button class="sidebar-toggle">
+                <i class="fas fa-bars"></i>
+            </button>
+        </div>
+        <ul class="sidebar-menu">
+            <li class="menu-item active" data-page="home">
+                <i class="fas fa-dashboard"></i>
+                <span>Overview</span>
+            </li>
+            <li class="menu-item" data-page="monitoring">
+                <i class="fas fa-video"></i>
+                <span>Surveillance</span>
+            </li>
+            <li class="menu-item" data-page="violations">
+                <i class="fas fa-exclamation-triangle"></i>
+                <span>Violations</span>
+            </li>
+            <li class="menu-item" data-page="about">
+                <i class="fas fa-info-circle"></i>
+                <span>About</span>
+            </li>
+        </ul>
+        <div class="sidebar-footer">
+            <div class="connection-status">
+                <div class="status-indicator" id="statusIndicator"></div>
+                <span id="statusText">Connecting...</span>
+            </div>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+        
+        <!-- HOME PAGE -->
+        <div id="homePage" class="page active">
+            <div class="page-header">
+                <h1>Surveillance Status</h1>
+                <p>Real-time traffic monitoring across Pune</p>
+            </div>
+
+            <!-- Surveillance Status Cards -->
+            <div class="stats-grid">
+                <div class="stat-card purple">
+                    <div class="stat-content">
+                        <h3>Total Surveillance</h3>
+                        <div class="stat-value">
+                            <span id="totalStreams">0</span>
+                        </div>
+                    </div>
+                    <div class="stat-icon">
+                        <i class="fas fa-video"></i>
+                    </div>
+                </div>
+
+                <div class="stat-card orange">
+                    <div class="stat-content">
+                        <h3>Maintenance</h3>
+                        <div class="stat-value">
+                            <span id="maintenanceStreams">0</span>
+                        </div>
+                    </div>
+                    <div class="stat-icon">
+                        <i class="fas fa-tools"></i>
+                    </div>
+                </div>
+
+                <div class="stat-card green">
+                    <div class="stat-content">
+                        <h3>Active Surveillance</h3>
+                        <div class="stat-value">
+                            <span id="activeStreams">0</span>
+                        </div>
+                    </div>
+                    <div class="stat-icon">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                </div>
+
+                <div class="stat-card red">
+                    <div class="stat-content">
+                        <h3>Inactive</h3>
+                        <div class="stat-value">
+                            <span id="inactiveStreams">0</span>
+                        </div>
+                    </div>
+                    <div class="stat-icon">
+                        <i class="fas fa-times-circle"></i>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Traffic Analytics -->
+            <div class="analytics-section">
+                <div class="section-header">
+                    <h2>Traffic Analytics</h2>
+                    <div class="time-filter">
+                        <button class="filter-btn active">Live</button>
+                        <button class="filter-btn">Today</button>
+                        <button class="filter-btn">Week</button>
+                    </div>
+                </div>
+
+                <div class="analytics-grid">
+                    <div class="analytics-card">
+                        <div class="analytics-icon vehicles">
+                            <i class="fas fa-car"></i>
+                        </div>
+                        <div class="analytics-content">
+                            <h4>Total Vehicles</h4>
+                            <div class="analytics-value" id="totalVehicles">0</div>
+                            <p class="analytics-trend">
+                                <i class="fas fa-arrow-up"></i> Real-time count
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="analytics-card">
+                        <div class="analytics-icon violations">
+                            <i class="fas fa-exclamation-circle"></i>
+                        </div>
+                        <div class="analytics-content">
+                            <h4>Total Violations</h4>
+                            <div class="analytics-value" id="totalViolations">0</div>
+                            <p class="analytics-trend">
+                                <i class="fas fa-arrow-up"></i> All types
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="analytics-card">
+                        <div class="analytics-icon speed">
+                            <i class="fas fa-tachometer-alt"></i>
+                        </div>
+                        <div class="analytics-content">
+                            <h4>Speed Violations</h4>
+                            <div class="analytics-value" id="speedViolations">0</div>
+                            <p class="analytics-trend">
+                                <i class="fas fa-exclamation-triangle"></i> Over limit
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="analytics-card">
+                        <div class="analytics-icon signal">
+                            <i class="fas fa-traffic-light"></i>
+                        </div>
+                        <div class="analytics-content">
+                            <h4>Signal Violations</h4>
+                            <div class="analytics-value" id="signalViolations">0</div>
+                            <p class="analytics-trend">
+                                <i class="fas fa-exclamation-triangle"></i> Red light
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Recent Violations -->
+            <div class="violations-preview">
+                <div class="section-header">
+                    <h2>Recent Violations</h2>
+                    <button class="view-all-btn" onclick="switchPage('violations')">
+                        View All <i class="fas fa-arrow-right"></i>
+                    </button>
+                </div>
+                <div class="violations-list" id="recentViolationsList">
+                    <div class="empty-state">
+                        <i class="fas fa-check-circle"></i>
+                        <p>No violations detected</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ABOUT PAGE -->
+        <div id="aboutPage" class="page">
+            <div class="page-header">
+                <h1>About PTU Traffic Monitoring System</h1>
+                <p>Advanced AI-powered traffic surveillance for safer roads</p>
+            </div>
+
+            <div class="about-content">
+                <div class="about-card">
+                    <div class="about-icon">
+                        <i class="fas fa-bullseye"></i>
+                    </div>
+                    <h3>Our Mission</h3>
+                    <p>To create safer roads through intelligent traffic monitoring and real-time violation detection. We leverage cutting-edge AI technology to analyze traffic patterns, detect violations, and provide actionable insights to traffic authorities.</p>
+                </div>
+
+                <div class="about-card">
+                    <div class="about-icon">
+                        <i class="fas fa-cogs"></i>
+                    </div>
+                    <h3>Technology Stack</h3>
+                    <ul class="tech-list">
+                        <li><i class="fas fa-check"></i> YOLOv8 for real-time vehicle detection</li>
+                        <li><i class="fas fa-check"></i> ByteTrack for multi-object tracking</li>
+                        <li><i class="fas fa-check"></i> Computer Vision for signal detection</li>
+                        <li><i class="fas fa-check"></i> FastAPI for high-performance backend</li>
+                        <li><i class="fas fa-check"></i> WebSocket for real-time updates</li>
+                        <li><i class="fas fa-check"></i> Multi-stream processing support</li>
+                    </ul>
+                </div>
+
+                <div class="about-card">
+                    <div class="about-icon">
+                        <i class="fas fa-chart-line"></i>
+                    </div>
+                    <h3>Key Features</h3>
+                    <ul class="features-list">
+                        <li><i class="fas fa-video"></i> Multi-stream surveillance (up to 4 concurrent streams)</li>
+                        <li><i class="fas fa-tachometer-alt"></i> Real-time speed monitoring and violation detection</li>
+                        <li><i class="fas fa-traffic-light"></i> Traffic signal state detection (Red/Yellow/Green)</li>
+                        <li><i class="fas fa-car"></i> Vehicle counting and classification</li>
+                        <li><i class="fas fa-database"></i> Automatic violation recording with timestamps</li>
+                        <li><i class="fas fa-youtube"></i> YouTube live stream support</li>
+                    </ul>
+                </div>
+
+                <div class="about-card">
+                    <div class="about-icon">
+                        <i class="fas fa-lightbulb"></i>
+                    </div>
+                    <h3>Problem Statement</h3>
+                    <p>Cities face significant challenges with traffic congestion, accidents, and rule violations. Traditional monitoring methods are labor-intensive and often miss critical incidents. Our system addresses these challenges through:</p>
+                    <ul class="problem-list">
+                        <li><i class="fas fa-exclamation-circle"></i> Automated 24/7 surveillance</li>
+                        <li><i class="fas fa-exclamation-circle"></i> Instant violation detection and recording</li>
+                        <li><i class="fas fa-exclamation-circle"></i> Data-driven traffic management insights</li>
+                        <li><i class="fas fa-exclamation-circle"></i> Reduced response times for incidents</li>
+                    </ul>
+                </div>
+
+                <div class="about-card full-width">
+                    <div class="about-icon">
+                        <i class="fas fa-heart"></i>
+                    </div>
+                    <h3>Support & Interest</h3>
+                    <p>This project is developed with the goal of making roads safer for everyone. We welcome contributions, feedback, and collaboration from:</p>
+                    <div class="support-grid">
+                        <div class="support-item">
+                            <i class="fas fa-building"></i>
+                            <h4>Traffic Authorities</h4>
+                            <p>Integrate with existing systems</p>
+                        </div>
+                        <div class="support-item">
+                            <i class="fas fa-users"></i>
+                            <h4>Developers</h4>
+                            <p>Contribute to open source</p>
+                        </div>
+                        <div class="support-item">
+                            <i class="fas fa-graduation-cap"></i>
+                            <h4>Researchers</h4>
+                            <p>Collaborate on improvements</p>
+                        </div>
+                        <div class="support-item">
+                            <i class="fas fa-handshake"></i>
+                            <h4>Partners</h4>
+                            <p>Deploy in your city</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="contact-section">
+                    <h3>Get in Touch</h3>
+                    <p>Interested in deploying this system or contributing to the project?</p>
+                    <div class="contact-buttons">
+                        <button class="contact-btn primary">
+                            <i class="fas fa-envelope"></i> Contact Us
+                        </button>
+                        <button class="contact-btn secondary">
+                            <i class="fab fa-github"></i> View on GitHub
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- MONITORING PAGE -->
+        <div id="monitoringPage" class="page">
+            <div class="page-header">
+                <h1>Live Monitoring</h1>
+                <p>Real-time surveillance from multiple camera feeds</p>
+            </div>
+
+            <!-- Stream Controls -->
+            <div class="stream-controls">
+                <h3>Stream Configuration</h3>
+                <div class="controls-grid">
+                    <div class="stream-control" data-stream="0">
+                        <div class="control-header">
+                            <h4>Stream 1</h4>
+                            <span class="stream-status" id="status0">Inactive</span>
+                        </div>
+                        <input type="text" class="stream-input" id="url0" placeholder="Enter video URL or YouTube link">
+                        <div class="upload-section">
+                            <label class="upload-label">
+                                <i class="fas fa-upload"></i> Or Upload Video
+                                <input type="file" id="file0" class="file-input" accept="video/*" onchange="handleFileSelect(0)">
+                            </label>
+                            <span class="file-name" id="fileName0"></span>
+                        </div>
+                        <div class="control-buttons">
+                            <button class="btn-start" onclick="startStream(0)">
+                                <i class="fas fa-play"></i> Start
+                            </button>
+                            <button class="btn-upload" id="uploadBtn0" onclick="uploadVideo(0)" style="display: none;">
+                                <i class="fas fa-cloud-upload-alt"></i> Upload & Start
+                            </button>
+                            <button class="btn-stop" onclick="stopStream(0)">
+                                <i class="fas fa-stop"></i> Stop
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="stream-control" data-stream="1">
+                        <div class="control-header">
+                            <h4>Stream 2</h4>
+                            <span class="stream-status" id="status1">Inactive</span>
+                        </div>
+                        <input type="text" class="stream-input" id="url1" placeholder="Enter video URL or YouTube link">
+                        <div class="upload-section">
+                            <label class="upload-label">
+                                <i class="fas fa-upload"></i> Or Upload Video
+                                <input type="file" id="file1" class="file-input" accept="video/*" onchange="handleFileSelect(1)">
+                            </label>
+                            <span class="file-name" id="fileName1"></span>
+                        </div>
+                        <div class="control-buttons">
+                            <button class="btn-start" onclick="startStream(1)">
+                                <i class="fas fa-play"></i> Start
+                            </button>
+                            <button class="btn-upload" id="uploadBtn1" onclick="uploadVideo(1)" style="display: none;">
+                                <i class="fas fa-cloud-upload-alt"></i> Upload & Start
+                            </button>
+                            <button class="btn-stop" onclick="stopStream(1)">
+                                <i class="fas fa-stop"></i> Stop
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="stream-control" data-stream="2">
+                        <div class="control-header">
+                            <h4>Stream 3</h4>
+                            <span class="stream-status" id="status2">Inactive</span>
+                        </div>
+                        <input type="text" class="stream-input" id="url2" placeholder="Enter video URL or YouTube link">
+                        <div class="upload-section">
+                            <label class="upload-label">
+                                <i class="fas fa-upload"></i> Or Upload Video
+                                <input type="file" id="file2" class="file-input" accept="video/*" onchange="handleFileSelect(2)">
+                            </label>
+                            <span class="file-name" id="fileName2"></span>
+                        </div>
+                        <div class="control-buttons">
+                            <button class="btn-start" onclick="startStream(2)">
+                                <i class="fas fa-play"></i> Start
+                            </button>
+                            <button class="btn-upload" id="uploadBtn2" onclick="uploadVideo(2)" style="display: none;">
+                                <i class="fas fa-cloud-upload-alt"></i> Upload & Start
+                            </button>
+                            <button class="btn-stop" onclick="stopStream(2)">
+                                <i class="fas fa-stop"></i> Stop
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="stream-control" data-stream="3">
+                        <div class="control-header">
+                            <h4>Stream 4</h4>
+                            <span class="stream-status" id="status3">Inactive</span>
+                        </div>
+                        <input type="text" class="stream-input" id="url3" placeholder="Enter video URL or YouTube link">
+                        <div class="upload-section">
+                            <label class="upload-label">
+                                <i class="fas fa-upload"></i> Or Upload Video
+                                <input type="file" id="file3" class="file-input" accept="video/*" onchange="handleFileSelect(3)">
+                            </label>
+                            <span class="file-name" id="fileName3"></span>
+                        </div>
+                        <div class="control-buttons">
+                            <button class="btn-start" onclick="startStream(3)">
+                                <i class="fas fa-play"></i> Start
+                            </button>
+                            <button class="btn-upload" id="uploadBtn3" onclick="uploadVideo(3)" style="display: none;">
+                                <i class="fas fa-cloud-upload-alt"></i> Upload & Start
+                            </button>
+                            <button class="btn-stop" onclick="stopStream(3)">
+                                <i class="fas fa-stop"></i> Stop
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Video Feeds -->
+            <div class="video-grid">
+                <div class="video-container" id="videoContainer0">
+                    <div class="video-header">
+                        <h4>Stream 1 - Swarget C-11</h4>
+                        <span class="live-badge" id="live0" style="display: none;">
+                            <i class="fas fa-circle"></i> LIVE
+                        </span>
+                    </div>
+                    <div class="video-placeholder" id="placeholder0">
+                        <i class="fas fa-video-slash"></i>
+                        <p>Stream Inactive</p>
+                    </div>
+                    <img class="video-feed" id="stream0" style="display: none;" alt="Stream 1">
+                    <div class="video-stats" id="stats0">
+                        <div class="stat"><i class="fas fa-car"></i> Vehicles: <span>0</span></div>
+                        <div class="stat"><i class="fas fa-tachometer-alt"></i> Avg Speed: <span>0</span> km/h</div>
+                        <div class="stat"><i class="fas fa-exclamation-triangle"></i> Violations: <span>0</span></div>
+                    </div>
+                </div>
+
+                <div class="video-container" id="videoContainer1">
+                    <div class="video-header">
+                        <h4>Stream 2 - Location 2</h4>
+                        <span class="live-badge" id="live1" style="display: none;">
+                            <i class="fas fa-circle"></i> LIVE
+                        </span>
+                    </div>
+                    <div class="video-placeholder" id="placeholder1">
+                        <i class="fas fa-video-slash"></i>
+                        <p>Stream Inactive</p>
+                    </div>
+                    <img class="video-feed" id="stream1" style="display: none;" alt="Stream 2">
+                    <div class="video-stats" id="stats1">
+                        <div class="stat"><i class="fas fa-car"></i> Vehicles: <span>0</span></div>
+                        <div class="stat"><i class="fas fa-tachometer-alt"></i> Avg Speed: <span>0</span> km/h</div>
+                        <div class="stat"><i class="fas fa-exclamation-triangle"></i> Violations: <span>0</span></div>
+                    </div>
+                </div>
+
+                <div class="video-container" id="videoContainer2">
+                    <div class="video-header">
+                        <h4>Stream 3 - Location 3</h4>
+                        <span class="live-badge" id="live2" style="display: none;">
+                            <i class="fas fa-circle"></i> LIVE
+                        </span>
+                    </div>
+                    <div class="video-placeholder" id="placeholder2">
+                        <i class="fas fa-video-slash"></i>
+                        <p>Stream Inactive</p>
+                    </div>
+                    <img class="video-feed" id="stream2" style="display: none;" alt="Stream 3">
+                    <div class="video-stats" id="stats2">
+                        <div class="stat"><i class="fas fa-car"></i> Vehicles: <span>0</span></div>
+                        <div class="stat"><i class="fas fa-tachometer-alt"></i> Avg Speed: <span>0</span> km/h</div>
+                        <div class="stat"><i class="fas fa-exclamation-triangle"></i> Violations: <span>0</span></div>
+                    </div>
+                </div>
+
+                <div class="video-container" id="videoContainer3">
+                    <div class="video-header">
+                        <h4>Stream 4 - Location 4</h4>
+                        <span class="live-badge" id="live3" style="display: none;">
+                            <i class="fas fa-circle"></i> LIVE
+                        </span>
+                    </div>
+                    <div class="video-placeholder" id="placeholder3">
+                        <i class="fas fa-video-slash"></i>
+                        <p>Stream Inactive</p>
+                    </div>
+                    <img class="video-feed" id="stream3" style="display: none;" alt="Stream 4">
+                    <div class="video-stats" id="stats3">
+                        <div class="stat"><i class="fas fa-car"></i> Vehicles: <span>0</span></div>
+                        <div class="stat"><i class="fas fa-tachometer-alt"></i> Avg Speed: <span>0</span> km/h</div>
+                        <div class="stat"><i class="fas fa-exclamation-triangle"></i> Violations: <span>0</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIOLATIONS PAGE -->
+        <div id="violationsPage" class="page">
+            <div class="page-header">
+                <h1>Violation Records</h1>
+                <p>Detailed tracking of all detected violations</p>
+            </div>
+
+            <!-- Violation Summary -->
+            <div class="violation-summary">
+                <div class="summary-card">
+                    <div class="summary-icon total">
+                        <i class="fas fa-exclamation-circle"></i>
+                    </div>
+                    <div class="summary-content">
+                        <h4>Total Violations</h4>
+                        <div class="summary-value" id="violationTotal">0</div>
+                    </div>
+                </div>
+
+                <div class="summary-card">
+                    <div class="summary-icon speed">
+                        <i class="fas fa-tachometer-alt"></i>
+                    </div>
+                    <div class="summary-content">
+                        <h4>Speed Violations</h4>
+                        <div class="summary-value" id="violationSpeed">0</div>
+                    </div>
+                </div>
+
+                <div class="summary-card">
+                    <div class="summary-icon signal">
+                        <i class="fas fa-traffic-light"></i>
+                    </div>
+                    <div class="summary-content">
+                        <h4>Signal Violations</h4>
+                        <div class="summary-value" id="violationSignal">0</div>
+                    </div>
+                </div>
+
+                <div class="summary-card">
+                    <div class="summary-icon today">
+                        <i class="fas fa-calendar-day"></i>
+                    </div>
+                    <div class="summary-content">
+                        <h4>Today's Violations</h4>
+                        <div class="summary-value" id="violationToday">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Filters -->
+            <div class="violation-filters">
+                <div class="filter-group">
+                    <label>Type:</label>
+                    <select id="violationTypeFilter">
+                        <option value="all">All Violations</option>
+                        <option value="speed_limit">Speed Violations</option>
+                        <option value="red_light_signal">Signal Violations</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Stream:</label>
+                    <select id="violationStreamFilter">
+                        <option value="all">All Streams</option>
+                        <option value="0">Stream 1</option>
+                        <option value="1">Stream 2</option>
+                        <option value="2">Stream 3</option>
+                        <option value="3">Stream 4</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Vehicle:</label>
+                    <select id="violationVehicleFilter">
+                        <option value="all">All Vehicles</option>
+                        <option value="car">Car</option>
+                        <option value="truck">Truck</option>
+                        <option value="bus">Bus</option>
+                        <option value="motorcycle">Motorcycle</option>
+                    </select>
+                </div>
+                <button class="filter-apply" onclick="applyFilters()">
+                    <i class="fas fa-filter"></i> Apply Filters
+                </button>
+            </div>
+
+            <!-- Violations Table -->
+            <div class="violations-table-container">
+                <table class="violations-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Stream</th>
+                            <th>Type</th>
+                            <th>Vehicle</th>
+                            <th>Speed</th>
+                            <th>Details</th>
+                            <th>Timestamp</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="violationsTableBody">
+                        <tr>
+                            <td colspan="8" class="empty-state">
+                                <i class="fas fa-check-circle"></i>
+                                <p>No violations detected</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </main>
+
+    <script src="./app.js"></script>
+</body>
+</html>
