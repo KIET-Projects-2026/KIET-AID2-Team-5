@@ -23,12 +23,12 @@ pyyaml==6.0.1
 tqdm==4.66.1
 
 # For YouTube streams (Required)
-yt-dlp>=2025.01.01
+yt-dlp>=2024.01.01
 pafy==0.5.5
 
 # Add for video streaming support
 requests==2.31.0
-streamlink==6.5.0
+streamlink>=6.0.0
 
 # Optional: For better video handling
 imageio==2.33.1

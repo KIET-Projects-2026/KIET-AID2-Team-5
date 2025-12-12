@@ -154,25 +154,104 @@ logger = logging.getLogger(__name__)
 # ==================== YOUTUBE STREAM HANDLER ====================
 
 def get_youtube_stream_url(youtube_url):
-    """Extract actual stream URL from YouTube video"""
+    """Extract actual stream URL from YouTube video with multiple fallback methods"""
+    logger.info(f"Extracting YouTube stream from: {youtube_url}")
+    
+    # Method 1: Try yt-dlp with various format options
+    yt_dlp_formats = [
+        ['yt-dlp', '-f', 'best[ext=mp4][height<=720]', '-g', youtube_url],
+        ['yt-dlp', '-f', 'best[ext=mp4]', '-g', youtube_url],
+        ['yt-dlp', '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best', '-g', youtube_url],
+        ['yt-dlp', '-f', 'best', '-g', youtube_url],
+        ['yt-dlp', '-f', '22/18/17', '-g', youtube_url],  # Specific YouTube format codes
+    ]
+    
+    for cmd in yt_dlp_formats:
+        try:
+            logger.info(f"Trying yt-dlp command: {' '.join(cmd)}")
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            stream_url = result.stdout.strip().split('\n')[0]  # Get first URL if multiple
+            if stream_url and stream_url.startswith('http'):
+                logger.info(f"Stream URL extracted successfully with yt-dlp")
+                return stream_url
+            if result.stderr:
+                logger.warning(f"yt-dlp stderr: {result.stderr[:200]}")
+        except subprocess.TimeoutExpired:
+            logger.warning("yt-dlp command timed out")
+        except FileNotFoundError:
+            logger.warning("yt-dlp not found, trying alternative methods")
+            break
+        except Exception as e:
+            logger.warning(f"yt-dlp method failed: {e}")
+    
+    # Method 2: Try youtube-dl as fallback
     try:
-        logger.info(f"Extracting YouTube stream from: {youtube_url}")
-        cmd = [
-            'yt-dlp',
-            '-f', 'best[ext=mp4]',
-            '-g',
-            youtube_url
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        cmd = ['youtube-dl', '-f', 'best', '-g', youtube_url]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         stream_url = result.stdout.strip()
-        if stream_url:
-            logger.info(f"Stream URL extracted successfully")
+        if stream_url and stream_url.startswith('http'):
+            logger.info(f"Stream URL extracted successfully with youtube-dl")
             return stream_url
-        else:
-            logger.error("No stream URL found")
+    except FileNotFoundError:
+        logger.warning("youtube-dl not found")
     except Exception as e:
-        logger.error(f"Failed to get YouTube stream: {e}")
+        logger.warning(f"youtube-dl method failed: {e}")
+    
+    # Method 3: Try streamlink for live streams
+    try:
+        cmd = ['streamlink', '--stream-url', youtube_url, 'best']
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        stream_url = result.stdout.strip()
+        if stream_url and stream_url.startswith('http'):
+            logger.info(f"Stream URL extracted successfully with streamlink")
+            return stream_url
+    except FileNotFoundError:
+        logger.warning("streamlink not found")
+    except Exception as e:
+        logger.warning(f"streamlink method failed: {e}")
+    
+    # Method 4: Try Python yt-dlp library directly
+    try:
+        import yt_dlp
+        ydl_opts = {
+            'format': 'best[ext=mp4][height<=720]/best[ext=mp4]/best',
+            'quiet': True,
+            'no_warnings': True,
+            'extract_flat': False,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            if info:
+                stream_url = info.get('url')
+                if not stream_url and 'formats' in info:
+                    # Get best format URL
+                    formats = info['formats']
+                    for fmt in reversed(formats):
+                        if fmt.get('url'):
+                            stream_url = fmt['url']
+                            break
+                if stream_url:
+                    logger.info(f"Stream URL extracted successfully with yt-dlp library")
+                    return stream_url
+    except ImportError:
+        logger.warning("yt-dlp Python library not available")
+    except Exception as e:
+        logger.warning(f"yt-dlp library method failed: {e}")
+    
+    logger.error(f"All YouTube extraction methods failed for: {youtube_url}")
     return None
+
+
+def is_youtube_url(url: str) -> bool:
+    """Check if URL is a YouTube URL"""
+    youtube_patterns = [
+        'youtube.com/watch',
+        'youtube.com/live',
+        'youtu.be/',
+        'youtube.com/shorts',
+        'youtube.com/embed'
+    ]
+    return any(pattern in url.lower() for pattern in youtube_patterns)
 
 # ==================== TRAFFIC LIGHT DETECTION ====================
 
@@ -943,6 +1022,7 @@ class SingleStreamMonitor:
         self.current_frame = None
         self.processing = False
         self.stream_url = None
+        self.last_error = None  # Track last error for API responses
         
         # Statistics
         self.fps = 0
@@ -1328,15 +1408,24 @@ class MultiStreamManager:
             logger.error(f"Stream ID {stream_id} exceeds maximum {Config.MAX_STREAMS}")
             return False
         
-        # Handle YouTube URLs
-        if 'youtube.com' in stream_url or 'youtu.be' in stream_url:
+        original_url = stream_url
+        
+        # Handle YouTube URLs with improved detection
+        if is_youtube_url(stream_url):
+            logger.info(f"YouTube URL detected: {stream_url}")
             actual_url = get_youtube_stream_url(stream_url)
             if not actual_url:
+                logger.error(f"Failed to extract YouTube stream URL from: {stream_url}")
+                # Store error for API response
+                if stream_id not in self.streams:
+                    self.streams[stream_id] = SingleStreamMonitor(stream_id)
+                self.streams[stream_id].last_error = "YouTube URL extraction failed. Please try a different video or upload directly."
                 return False
             stream_url = actual_url
+            logger.info(f"YouTube stream URL extracted successfully")
         
         # Handle webcam
-        if stream_url.isdigit():
+        if isinstance(stream_url, str) and stream_url.isdigit():
             stream_url = int(stream_url)
         
         if stream_id not in self.streams:
@@ -1377,42 +1466,64 @@ class MultiStreamManager:
             logger.info(f"Stream {stream_id} stopped")
     
     def _process_stream(self, stream_id: int, stream_url: str):
-        """Process video stream"""
+        """Process video stream with smooth frame delivery"""
         monitor = self.streams[stream_id]
-        cap = cv2.VideoCapture(stream_url)
         
-        # Set buffer size for better performance
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
-        
-        # Set FPS if it's a file
-        if isinstance(stream_url, str) and os.path.isfile(stream_url):
-            original_fps = cap.get(cv2.CAP_PROP_FPS)
-            if original_fps > 0:
-                frame_delay = 1.0 / original_fps
-            else:
-                frame_delay = 1.0 / Config.OUTPUT_FPS
+        # Configure OpenCV for better network stream handling
+        if isinstance(stream_url, str) and stream_url.startswith('http'):
+            # For network streams (including YouTube)
+            cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 5)
+            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 30000)
+            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 30000)
         else:
-            frame_delay = 1.0 / Config.OUTPUT_FPS
+            cap = cv2.VideoCapture(stream_url)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+        
+        # Get source FPS for timing
+        source_fps = cap.get(cv2.CAP_PROP_FPS)
+        is_file = isinstance(stream_url, str) and os.path.isfile(stream_url)
+        
+        if is_file and source_fps > 0:
+            target_fps = min(source_fps, Config.OUTPUT_FPS)
+            frame_delay = 1.0 / target_fps
+        else:
+            target_fps = Config.OUTPUT_FPS
+            frame_delay = 1.0 / target_fps
         
         frame_count = 0
         start_time = time.time()
+        processing_times = deque(maxlen=30)  # Track processing times for adaptive delay
         
         if not cap.isOpened():
             logger.error(f"Stream {stream_id}: Failed to open {stream_url}")
             monitor.processing = False
+            monitor.last_error = "Failed to open video source"
             return
         
-        logger.info(f"Stream {stream_id}: Processing started")
+        logger.info(f"Stream {stream_id}: Processing started (Source FPS: {source_fps:.1f}, Target: {target_fps:.1f})")
+        
+        consecutive_failures = 0
+        max_failures = 50  # About 1.5 seconds at 30fps
         
         while monitor.processing:
+            frame_start = time.time()
+            
             ret, frame = cap.read()
             if not ret:
-                logger.warning(f"Stream {stream_id}: End of video or failed to read frame")
-                break
+                consecutive_failures += 1
+                if consecutive_failures >= max_failures:
+                    logger.warning(f"Stream {stream_id}: End of video or too many consecutive failures")
+                    break
+                # For live streams, small delay before retry
+                if not is_file:
+                    time.sleep(0.01)
+                continue
             
+            consecutive_failures = 0
             frame_count += 1
             
-            # Process every frame (no skipping for smooth output)
+            # Process frame
             try:
                 monitor.frame_count = frame_count
                 monitor.process_frame(frame)
@@ -1420,19 +1531,32 @@ class MultiStreamManager:
                 logger.error(f"Stream {stream_id}: Processing error - {e}")
                 import traceback
                 traceback.print_exc()
+                continue
             
-            # Calculate FPS
+            # Calculate actual FPS
             elapsed = time.time() - start_time
             if elapsed > 0:
                 monitor.fps = frame_count / elapsed
             
-            # Control playback speed for smooth output
-            time.sleep(max(0.001, frame_delay - 0.005))  # Slight adjustment for processing time
+            # Adaptive frame timing for smooth playback
+            processing_time = time.time() - frame_start
+            processing_times.append(processing_time)
+            avg_processing = sum(processing_times) / len(processing_times)
+            
+            # Calculate delay needed for target frame rate
+            target_delay = frame_delay - avg_processing
+            
+            if target_delay > 0.001:
+                time.sleep(target_delay)
+            else:
+                # At least yield to other threads
+                time.sleep(0.001)
         
         cap.release()
         if monitor.video_writer is not None:
             monitor.video_writer.release()
         
+        monitor.processing = False
         logger.info(f"Stream {stream_id} processing stopped. Total frames: {frame_count}")
         logger.info(f"Total violations detected: {sum(monitor.violation_counts.values())}")
     
@@ -1521,16 +1645,32 @@ async def start_stream(stream_id: int, stream_url: str, save_output: bool = True
     if stream_id < 0 or stream_id >= Config.MAX_STREAMS:
         raise HTTPException(status_code=400, detail=f"Stream ID must be between 0 and {Config.MAX_STREAMS-1}")
     
+    # Validate URL
+    if not stream_url:
+        raise HTTPException(status_code=400, detail="Stream URL is required")
+    
+    # Check if it's a YouTube URL and provide helpful error message
+    if is_youtube_url(stream_url):
+        logger.info(f"YouTube URL detected for stream {stream_id}: {stream_url}")
+    
     success = manager.start_stream(stream_id, stream_url, save_output)
     if success:
         return {
             "status": "started",
             "stream_id": stream_id,
             "stream_url": stream_url,
-            "save_output": save_output
+            "save_output": save_output,
+            "message": "Stream started successfully"
         }
     else:
-        raise HTTPException(status_code=400, detail="Failed to start stream")
+        # Get error details if available
+        error_detail = "Failed to start stream"
+        if stream_id in manager.streams and manager.streams[stream_id].last_error:
+            error_detail = manager.streams[stream_id].last_error
+        elif is_youtube_url(stream_url):
+            error_detail = "YouTube URL extraction failed. The video may be private, age-restricted, or unavailable. Try uploading the video directly instead."
+        
+        raise HTTPException(status_code=400, detail=error_detail)
 
 @app.post("/api/stop-stream/{stream_id}")
 async def stop_stream(stream_id: int):
@@ -1625,7 +1765,7 @@ async def get_violations(limit: int = 100, violation_type: str = None):
 
 @app.get("/stream/{stream_id}")
 async def stream_video(stream_id: int):
-    """Get MJPEG stream for a specific stream"""
+    """Get MJPEG stream for a specific stream - optimized for smooth playback"""
     if stream_id not in manager.streams:
         raise HTTPException(status_code=404, detail="Stream not found")
     
@@ -1637,22 +1777,36 @@ async def stream_video(stream_id: int):
     def generate():
         empty_frame_count = 0
         max_empty_frames = 100  # ~3 seconds of waiting
+        last_frame = None
+        frame_interval = 1.0 / Config.OUTPUT_FPS
+        last_send_time = time.time()
         
         while monitor.processing:
+            current_time = time.time()
             frame_to_send = None
             
             with monitor.buffer_lock:
                 if monitor.current_frame is not None:
+                    # Only send if frame is different or enough time has passed
                     frame_to_send = monitor.current_frame.copy()
                     empty_frame_count = 0
             
             if frame_to_send is not None:
-                ret, buffer = cv2.imencode('.jpg', frame_to_send, 
-                                          [cv2.IMWRITE_JPEG_QUALITY, Config.VIDEO_QUALITY])
+                # Encode frame with optimized quality for streaming
+                encode_params = [
+                    cv2.IMWRITE_JPEG_QUALITY, Config.VIDEO_QUALITY,
+                    cv2.IMWRITE_JPEG_OPTIMIZE, 1,
+                    cv2.IMWRITE_JPEG_PROGRESSIVE, 0
+                ]
+                ret, buffer = cv2.imencode('.jpg', frame_to_send, encode_params)
                 if ret:
                     frame_bytes = buffer.tobytes()
                     yield (b'--frame\r\n'
-                           b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+                           b'Content-Type: image/jpeg\r\n'
+                           b'Content-Length: ' + str(len(frame_bytes)).encode() + b'\r\n\r\n' 
+                           + frame_bytes + b'\r\n')
+                    last_frame = frame_to_send
+                    last_send_time = current_time
             else:
                 empty_frame_count += 1
                 if empty_frame_count > max_empty_frames:
@@ -1666,9 +1820,21 @@ async def stream_video(stream_id: int):
                                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
                     empty_frame_count = 0
             
-            time.sleep(0.033)  # ~30 FPS
+            # Smooth frame rate control
+            elapsed = time.time() - current_time
+            sleep_time = max(0.001, frame_interval - elapsed)
+            time.sleep(sleep_time)
     
-    return StreamingResponse(generate(), media_type="multipart/x-mixed-replace; boundary=frame")
+    return StreamingResponse(
+        generate(), 
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "keep-alive"
+        }
+    )
 
 @app.get("/stream/{stream_id}/frame")
 async def get_single_frame(stream_id: int):
