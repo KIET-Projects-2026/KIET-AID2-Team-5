@@ -52,6 +52,7 @@ python -m pip install --upgrade pip setuptools wheel
 py -3.10 -m venv venv
 pip install numpy==1.26.4
 python --version
+python -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"
 pip install -r requirements.txt
 pip install streamlink imageio imageio-ffmpeg pafy
 pip install --upgrade yt-dlp
