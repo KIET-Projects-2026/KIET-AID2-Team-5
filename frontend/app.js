@@ -1,5 +1,16 @@
-// API Configuration
-const API_BASE = 'http://localhost:8000';
+// API Configuration - Auto-detect environment
+const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:8000'
+    : 'https://trafficmonitoringsystem.onrender.com';
+
+const WS_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'ws://localhost:8000'
+    : 'wss://trafficmonitoringsystem.onrender.com';
+
+console.log('Environment detected:', window.location.hostname);
+console.log('API Base:', API_BASE);
+console.log('WebSocket Base:', WS_BASE);
+
 let ws = null;
 let allViolations = [];
 let streamStates = [false, false, false, false];
@@ -225,13 +236,13 @@ function switchPage(pageName) {
 // ==================== WEBSOCKET CONNECTION ====================
 
 function connectWebSocket() {
-    const wsUrl = 'ws://localhost:8000/ws';
+    const wsUrl = `${WS_BASE}/ws`;
     
     try {
         ws = new WebSocket(wsUrl);
         
         ws.onopen = () => {
-            console.log('WebSocket connected');
+            console.log('WebSocket connected to:', wsUrl);
             updateConnectionStatus(true);
         };
         

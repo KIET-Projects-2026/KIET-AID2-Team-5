@@ -45,10 +45,18 @@ app = FastAPI(
     version="4.0.0"
 )
 
-# CORS Configuration
+# CORS Configuration - Allow both local and production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "https://trafficmonitoringsystem.onrender.com",
+        "https://*.vercel.app",  # Your Vercel domain
+        "https://*.vercel.app",  # Allow all Vercel preview deployments
+        "*"  # Remove this in production for security
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
