@@ -16,7 +16,10 @@ let allViolations = [];
 let streamStates = [false, false, false, false];
 let streamIntervals = [null, null, null, null];
 let streamRetryCount = [0, 0, 0, 0];
+let streamFrameBuffers = [{}, {}, {}, {}];  // Pre-fetch buffers for smooth rendering
 const MAX_RETRY_COUNT = 10;
+const TARGET_FPS = 25;  // Target frame rate for smooth playback
+const FRAME_INTERVAL = 1000 / TARGET_FPS;
 
 // ==================== STREAM RENDERING ====================
 
@@ -44,19 +47,69 @@ function startStreamRendering(streamId) {
         streamIntervals[streamId] = null;
     }
     
-    // Use frame polling approach which is more reliable across browsers
-    // MJPEG streams can be problematic with img.onerror in some browsers
-    streamStates[streamId] = 'polling';
-    startFramePolling(streamId);
+    // Try MJPEG stream first, fallback to polling
+    streamStates[streamId] = 'mjpeg';
+    tryMJPEGStream(streamId);
 }
 
-function startFramePolling(streamId) {
+function tryMJPEGStream(streamId) {
     const imgElement = document.getElementById(`stream${streamId}`);
     const placeholder = document.getElementById(`placeholder${streamId}`);
     
     if (!imgElement) return;
     
-    console.log(`Stream ${streamId}: Starting frame polling`);
+    console.log(`Stream ${streamId}: Attempting MJPEG stream connection`);
+    
+    const mjpegUrl = `${API_BASE}/stream/${streamId}`;
+    let mjpegTimeout = null;
+    let loadAttempts = 0;
+    const maxLoadAttempts = 3;
+    
+    // Set up load handler
+    imgElement.onload = () => {
+        console.log(`Stream ${streamId}: MJPEG stream connected successfully`);
+        clearTimeout(mjpegTimeout);
+        streamRetryCount[streamId] = 0;
+        
+        if (placeholder) {
+            placeholder.style.display = 'none';
+        }
+        imgElement.style.display = 'block';
+    };
+    
+    // Set up error handler
+    imgElement.onerror = () => {
+        loadAttempts++;
+        console.warn(`Stream ${streamId}: MJPEG load error (attempt ${loadAttempts}/${maxLoadAttempts})`);
+        
+        if (loadAttempts >= maxLoadAttempts) {
+            console.log(`Stream ${streamId}: MJPEG failed, switching to frame polling`);
+            streamStates[streamId] = 'polling';
+            startSmoothFramePolling(streamId);
+        }
+    };
+    
+    // Set timeout to fallback to polling if MJPEG doesn't start
+    mjpegTimeout = setTimeout(() => {
+        if (streamStates[streamId] === 'mjpeg') {
+            console.log(`Stream ${streamId}: MJPEG timeout, switching to frame polling`);
+            imgElement.src = '';
+            streamStates[streamId] = 'polling';
+            startSmoothFramePolling(streamId);
+        }
+    }, 5000);
+    
+    // Start MJPEG stream
+    imgElement.src = mjpegUrl;
+}
+
+function startSmoothFramePolling(streamId) {
+    const imgElement = document.getElementById(`stream${streamId}`);
+    const placeholder = document.getElementById(`placeholder${streamId}`);
+    
+    if (!imgElement) return;
+    
+    console.log(`Stream ${streamId}: Starting smooth frame polling at ${TARGET_FPS} FPS`);
     
     // Clear any existing interval
     if (streamIntervals[streamId]) {
@@ -64,42 +117,33 @@ function startFramePolling(streamId) {
     }
     
     let consecutiveErrors = 0;
-    const maxConsecutiveErrors = 30; // About 3 seconds of errors
+    const maxConsecutiveErrors = 30;
+    let lastFrameTime = performance.now();
+    let frameBuffer = null;
+    let isLoading = false;
     
-    function pollFrame() {
-        if (streamStates[streamId] === false) {
-            console.log(`Stream ${streamId}: Stopping frame polling (stream stopped)`);
-            if (streamIntervals[streamId]) {
-                clearInterval(streamIntervals[streamId]);
-                streamIntervals[streamId] = null;
-            }
-            return;
-        }
+    // Pre-fetch next frame while displaying current
+    function prefetchFrame() {
+        if (isLoading) return;
         
+        isLoading = true;
         const frameUrl = `${API_BASE}/stream/${streamId}/frame?t=${Date.now()}`;
         
-        // Create temporary image to test load
         const tempImg = new Image();
         
         tempImg.onload = () => {
+            isLoading = false;
+            frameBuffer = tempImg;
             consecutiveErrors = 0;
             streamRetryCount[streamId] = 0;
-            
-            // Update the actual image element
-            imgElement.src = tempImg.src;
-            imgElement.style.display = 'block';
-            
-            if (placeholder) {
-                placeholder.style.display = 'none';
-            }
         };
         
         tempImg.onerror = () => {
+            isLoading = false;
             consecutiveErrors++;
-            console.warn(`Stream ${streamId}: Frame polling error (${consecutiveErrors}/${maxConsecutiveErrors})`);
             
             if (consecutiveErrors >= maxConsecutiveErrors) {
-                console.error(`Stream ${streamId}: Too many errors, checking stream status...`);
+                console.error(`Stream ${streamId}: Too many errors, checking status...`);
                 checkStreamStatus(streamId);
             }
         };
@@ -107,11 +151,43 @@ function startFramePolling(streamId) {
         tempImg.src = frameUrl;
     }
     
-    // Start polling at ~15 FPS for smooth playback
-    streamIntervals[streamId] = setInterval(pollFrame, 66);
+    function displayFrame() {
+        if (streamStates[streamId] === false) {
+            console.log(`Stream ${streamId}: Stopping frame polling`);
+            if (streamIntervals[streamId]) {
+                clearInterval(streamIntervals[streamId]);
+                streamIntervals[streamId] = null;
+            }
+            return;
+        }
+        
+        const now = performance.now();
+        const elapsed = now - lastFrameTime;
+        
+        // Display buffered frame if available and enough time has passed
+        if (frameBuffer && elapsed >= FRAME_INTERVAL * 0.8) {
+            imgElement.src = frameBuffer.src;
+            imgElement.style.display = 'block';
+            
+            if (placeholder) {
+                placeholder.style.display = 'none';
+            }
+            
+            frameBuffer = null;
+            lastFrameTime = now;
+        }
+        
+        // Pre-fetch next frame
+        if (!frameBuffer && !isLoading) {
+            prefetchFrame();
+        }
+    }
     
-    // Initial poll
-    pollFrame();
+    // Start polling at higher rate than target FPS for smoother playback
+    streamIntervals[streamId] = setInterval(displayFrame, FRAME_INTERVAL / 2);
+    
+    // Initial prefetch
+    prefetchFrame();
 }
 
 async function checkStreamStatus(streamId) {
