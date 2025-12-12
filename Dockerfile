@@ -1,5 +1,6 @@
 FROM python:3.11-slim
 
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libgl1 \
@@ -9,19 +10,16 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# Set pip timeout and index to be more tolerant on slow networks
+# Increase pip timeout for slow networks
 ENV PIP_DEFAULT_TIMEOUT=300
 
-# Copy and install lighter runtime deps first
-COPY requirements.runtime.txt .
-RUN pip install --no-cache-dir -r requirements.runtime.txt
+# Copy and install dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Install AI deps separately (so if this fails, you can retry only this layer)
-COPY requirements.ai.txt .
-RUN pip install --no-cache-dir -r requirements.ai.txt
-
-# Copy the whole project
+# Copy entire project
 COPY . .
 
 EXPOSE 8000
+
 CMD ["uvicorn", "backend_complete:app", "--host", "0.0.0.0", "--port", "8000"]
