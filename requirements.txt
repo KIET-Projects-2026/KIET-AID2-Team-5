@@ -17,11 +17,12 @@ lapx>=0.5.2
 aiofiles==23.2.1
 
 # For YouTube streams (Required)
-yt-dlp>=2023.10.13
+yt-dlp>=2025.01.01
+pafy==0.5.5
 
 # Add for video streaming support
 requests==2.31.0
-streamlink==6.2.0
+streamlink==6.5.0
 
 # PyTorch (CPU version for deployment)
 torch==2.1.1
