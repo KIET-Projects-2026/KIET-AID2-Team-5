@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TMS - Traffic Monitoring System</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="/frontend/styles.css">
+</head>
+<body>
+    <!-- Public Landing Navbar -->
+    <nav class="navbar">
+        <div class="navbar-container">
+            <div class="navbar-brand">
+                <div class="logo-container">
+                    <div class="logo-signal"></div>
+                </div>
+                <span class="brand-text">TMS - Traffic Monitoring</span>
+            </div>
+            <div class="navbar-menu">
+                <a class="nav-link active" href="#home">
+                    <i class="fas fa-home"></i> Home
+                </a>
+                <a class="nav-link" href="#about">
+                    <i class="fas fa-info-circle"></i> About
+                </a>
+                <a class="nav-link" href="#project">
+                    <i class="fas fa-project-diagram"></i> Project
+                </a>
+                <a class="nav-link" href="#contact">
+                    <i class="fas fa-envelope"></i> Contact
+                </a>
+            </div>
+            <div class="navbar-actions">
+                <button class="login-btn" onclick="showAuthModal()">
+                    <i class="fas fa-arrow-right-to-bracket"></i>
+                    <span>Get Started</span>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Landing Content -->
+    <main class="main-content landing-page">
+        <!-- Home / Hero Section -->
+        <section id="home" class="landing-container">
+            <div class="landing-hero">
+                <div class="hero-logo">
+                    <div class="logo-large">
+                        <div class="logo-icon">TMS</div>
+                        <div class="signal-pulse"></div>
+                    </div>
+                </div>
+
+                <h1 class="hero-title">AI Traffic Monitoring System</h1>
+                <p class="hero-subtitle">
+                    Real-time vehicle detection, speed monitoring, and violation tracking to make roads
+                    safer and smarter using advanced computer vision and deep learning.
+                </p>
+
+                <div class="hero-actions">
+                    <button class="btn btn-large" onclick="openSignup()">
+                        <i class="fas fa-user-plus"></i> Get Started – Sign Up
+                    </button>
+                    <button class="btn btn-secondary btn-large" onclick="openLogin()">
+                        <i class="fas fa-right-to-bracket"></i> Already have an account? Login
+                    </button>
+                </div>
+
+                <div class="hero-features">
+                    <div class="feature-item">
+                        <i class="fas fa-video"></i>
+                        <span>Multi-camera live stream monitoring</span>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-tachometer-alt"></i>
+                        <span>Accurate vehicle speed estimation</span>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-traffic-light"></i>
+                        <span>Red light and signal violation detection</span>
+                    </div>
+                    <div class="feature-item">
+                        <i class="fas fa-road"></i>
+                        <span>Lane, stop-line and unsafe distance violations</span>
+                    </div>
+                </div>
+
+                <div class="hero-stats">
+                    <div class="stat-item">
+                        <div class="stat-number">4+</div>
+                        <div class="stat-text">Concurrent Streams</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">6</div>
+                        <div class="stat-text">Violation Types</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-number">24/7</div>
+                        <div class="stat-text">Continuous Monitoring</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- About Section -->
+        <section id="about" class="grid-section">
+            <div class="section-title">
+                <i class="fas fa-circle-info"></i>
+                About the Project
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-title">Traffic Monitoring System (TMS)</div>
+                </div>
+                <p>
+                    The Traffic Monitoring System is an end-to-end solution that uses YOLOv8-based
+                    object detection and custom computer vision logic to automatically monitor
+                    road traffic in real time. It tracks vehicles across multiple streams,
+                    estimates their speed, detects violations, and stores structured records in
+                    a database for analysis and reporting.
+                </p>
+                <p style="margin-top: 1rem;">
+                    This project is designed for smart cities, traffic departments, and
+                    academic research, demonstrating how AI can be integrated with live streams
+                    to improve safety, enforcement, and traffic flow management.
+                </p>
+            </div>
+        </section>
+
+        <!-- Project Details Section -->
+        <section id="project" class="grid-section">
+            <div class="section-title">
+                <i class="fas fa-project-diagram"></i>
+                Project Overview & Features
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <i class="fas fa-brain stat-icon"></i>
+                    <div class="stat-label">Core Technology</div>
+                    <div class="stat-unit">
+                        YOLOv8 object detection, OpenCV-based tracking, FastAPI backend, MongoDB storage,
+                        and a modern dashboard frontend.
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-shield-alt stat-icon"></i>
+                    <div class="stat-label">Violation Detection</div>
+                    <div class="stat-unit">
+                        Speeding, red light jump, unsafe following distance, lane misuse, and
+                        stop-line violations with image evidence.
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-gauge-high stat-icon"></i>
+                    <div class="stat-label">Live Analytics</div>
+                    <div class="stat-unit">
+                        Real-time statistics on total vehicles, active streams, and violations
+                        with a rich visualization dashboard.
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-users stat-icon"></i>
+                    <div class="stat-label">User Access</div>
+                    <div class="stat-unit">
+                        Secure signup and login, JWT-based authentication, and protected
+                        dashboard access after successful login.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Contact Section -->
+        <section id="contact" class="grid-section">
+            <div class="section-title">
+                <i class="fas fa-envelope-open-text"></i>
+                Contact & Reach Us
+            </div>
+            <div class="card">
+                <p>
+                    For project-related queries, collaboration, or academic discussions, feel
+                    free to reach out to the team.
+                </p>
+                <div style="margin-top: 1.5rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.5rem;">
+                    <div>
+                        <h4 style="font-size:14px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.5rem; color:var(--text-secondary);">
+                            Email
+                        </h4>
+                        <p><a href="mailto:support@tms.com">support@tms.com</a></p>
+                    </div>
+                    <div>
+                        <h4 style="font-size:14px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.5rem; color:var(--text-secondary);">
+                            Project Dashboard
+                        </h4>
+                        <p><a href="/dashboard">Open Monitoring Dashboard (after login)</a></p>
+                    </div>
+                    <div>
+                        <h4 style="font-size:14px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.5rem; color:var(--text-secondary);">
+                            Get Started
+                        </h4>
+                        <p>
+                            Click the <strong>Get Started</strong> button in the top-right
+                            to sign up or log in and access the secure dashboard.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Auth Modal (shared with dashboard, but redirects to /dashboard after login) -->
+    <div class="auth-overlay" id="authModal">
+        <div class="auth-container">
+            <div class="auth-header">
+                <div class="auth-logo">TMS</div>
+                <h2 class="auth-title">Welcome to TMS</h2>
+                <p class="auth-subtitle">Sign up or login to access the monitoring dashboard</p>
+            </div>
+
+            <div class="auth-tabs">
+                <button class="auth-tab active" onclick="switchAuthTab('login')">Login</button>
+                <button class="auth-tab" onclick="switchAuthTab('signup')">Sign Up</button>
+            </div>
+
+            <div class="auth-error" id="authError">
+                <i class="fas fa-exclamation-circle"></i>
+                <span id="authErrorText">Error message</span>
+            </div>
+
+            <!-- Login Form -->
+            <form class="auth-form active" id="loginForm" onsubmit="handleLogin(event)">
+                <div class="form-group">
+                    <label class="form-label">Email Address</label>
+                    <div class="form-input-icon">
+                        <i class="fas fa-envelope"></i>
+                        <input type="email" class="form-input" id="loginEmail" placeholder="Enter your email" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <div class="form-input-icon">
+                        <i class="fas fa-lock"></i>
+                        <input type="password" class="form-input" id="loginPassword" placeholder="Enter your password" required>
+                    </div>
+                </div>
+                <button type="submit" class="auth-btn" id="loginSubmitBtn">
+                    <span>Login</span>
+                </button>
+            </form>
+
+            <!-- Signup Form -->
+            <form class="auth-form" id="signupForm" onsubmit="handleSignup(event)">
+                <div class="form-group">
+                    <label class="form-label">Full Name</label>
+                    <div class="form-input-icon">
+                        <i class="fas fa-user"></i>
+                        <input type="text" class="form-input" id="signupName" placeholder="Enter your full name" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Username</label>
+                    <div class="form-input-icon">
+                        <i class="fas fa-at"></i>
+                        <input type="text" class="form-input" id="signupUsername" placeholder="Choose a username" required minlength="3">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Email Address</label>
+                    <div class="form-input-icon">
+                        <i class="fas fa-envelope"></i>
+                        <input type="email" class="form-input" id="signupEmail" placeholder="Enter your email" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <div class="form-input-icon">
+                        <i class="fas fa-lock"></i>
+                        <input type="password" class="form-input" id="signupPassword" placeholder="Create a password (min 6 chars)" required minlength="6">
+                    </div>
+                </div>
+                <button type="submit" class="auth-btn" id="signupSubmitBtn">
+                    <span>Create Account</span>
+                </button>
+            </form>
+
+            <div class="auth-divider">
+                <span>Secure Access</span>
+            </div>
+
+            <p style="text-align: center; font-size: 12px; color: var(--text-secondary);">
+                <i class="fas fa-shield-alt" style="color: var(--primary);"></i>
+                Your account protects access to the live monitoring dashboard and violation records.
+            </p>
+        </div>
+    </div>
+
+    <!-- Footer (public) -->
+    <footer class="footer">
+        <div class="footer-content">
+            <div class="footer-section">
+                <h4><i class="fas fa-traffic-light"></i> TMS System</h4>
+                <p>AI-based traffic monitoring and violation detection for safer and smarter roads.</p>
+            </div>
+            <div class="footer-section">
+                <h4><i class="fas fa-cogs"></i> Technology Stack</h4>
+                <p>✓ FastAPI backend & WebSockets</p>
+                <p>✓ YOLOv8 + OpenCV for detection</p>
+                <p>✓ MongoDB for persistent storage</p>
+            </div>
+            <div class="footer-section">
+                <h4><i class="fas fa-lock"></i> Access Control</h4>
+                <p>Only authenticated users can access the monitoring dashboards.</p>
+                <p><a href="#" onclick="showAuthModal()">Get Started Now</a></p>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2024 TMS - Traffic Monitoring System. All rights reserved.</p>
+            <p>Built for academic and smart city traffic research.</p>
+        </div>
+    </footer>
+
+    <script src="/frontend/landing.js"></script>
+</body>
+</html>
+
+

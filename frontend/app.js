@@ -1,1058 +1,1019 @@
-// API Configuration - Auto-detect environment
-const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? 'http://localhost:8000'
-    : 'https://trafficmonitoringsystem.onrender.com';
+      // ==================== CONFIGURATION ====================
+        // Auto-detect API URL: Use Render backend URL in production, localhost in development
+        // IMPORTANT: Replace 'YOUR_RENDER_APP_NAME' with your actual Render service name after deployment
+        const API_BASE_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:8000'
+            : 'https://traffic-monitoring-api.onrender.com';  // <-- UPDATE THIS with your Render URL
+        
+        const WS_BASE_URL = API_BASE_URL.replace('http', 'ws').replace('https', 'wss');
+        const POLL_INTERVAL = 2000; // 2 seconds
+        const STREAM_POLL_INTERVAL = 1000; // 1 second for stream frames
 
-const WS_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? 'ws://localhost:8000'
-    : 'wss://trafficmonitoringsystem.onrender.com';
+        console.log('🚀 Traffic Monitoring System');
+        console.log('📡 API URL:', API_BASE_URL);
+        console.log('🔌 WebSocket URL:', WS_BASE_URL);
 
-console.log('Environment detected:', window.location.hostname);
-console.log('API Base:', API_BASE);
-console.log('WebSocket Base:', WS_BASE);
+        // Global state
+        let systemStats = {};
+        let activeStreams = new Set();
+        let pollInterval = null;
+        let streamPollIntervals = {};
+        let currentUser = null;
+        let authToken = null;
+        let violationsByTypeChart = null;
+        let streamsVehiclesChart = null;
+        let violationsOverTimeChart = null;
+        let analyticsDateRange = 'all';
 
-let ws = null;
-let allViolations = [];
-let streamStates = [false, false, false, false];
-let streamIntervals = [null, null, null, null];
-let streamRetryCount = [0, 0, 0, 0];
-const MAX_RETRY_COUNT = 10;
-
-// ==================== STREAM RENDERING ====================
-
-function startStreamRendering(streamId) {
-    const imgElement = document.getElementById(`stream${streamId}`);
-    const placeholder = document.getElementById(`placeholder${streamId}`);
-    
-    if (!imgElement) {
-        console.error(`Stream ${streamId}: Image element not found`);
-        return;
-    }
-    
-    // Reset retry count when starting fresh
-    streamRetryCount[streamId] = 0;
-    
-    console.log(`Starting stream rendering for stream ${streamId}`);
-    
-    // Hide placeholder, show video
-    if (placeholder) placeholder.style.display = 'none';
-    imgElement.style.display = 'block';
-    
-    // Clear any existing interval
-    if (streamIntervals[streamId]) {
-        clearInterval(streamIntervals[streamId]);
-        streamIntervals[streamId] = null;
-    }
-    
-    // Use frame polling approach which is more reliable across browsers
-    // MJPEG streams can be problematic with img.onerror in some browsers
-    streamStates[streamId] = 'polling';
-    startFramePolling(streamId);
-}
-
-function startFramePolling(streamId) {
-    const imgElement = document.getElementById(`stream${streamId}`);
-    const placeholder = document.getElementById(`placeholder${streamId}`);
-    
-    if (!imgElement) return;
-    
-    console.log(`Stream ${streamId}: Starting frame polling`);
-    
-    // Clear any existing interval
-    if (streamIntervals[streamId]) {
-        clearInterval(streamIntervals[streamId]);
-    }
-    
-    let consecutiveErrors = 0;
-    const maxConsecutiveErrors = 30; // About 3 seconds of errors
-    
-    function pollFrame() {
-        if (streamStates[streamId] === false) {
-            console.log(`Stream ${streamId}: Stopping frame polling (stream stopped)`);
-            if (streamIntervals[streamId]) {
-                clearInterval(streamIntervals[streamId]);
-                streamIntervals[streamId] = null;
-            }
-            return;
+        // ==================== AUTH FUNCTIONS ====================
+        
+        function showAuthModal() {
+            document.getElementById('authModal').classList.add('active');
+            document.getElementById('loginEmail').focus();
         }
-        
-        const frameUrl = `${API_BASE}/stream/${streamId}/frame?t=${Date.now()}`;
-        
-        // Create temporary image to test load
-        const tempImg = new Image();
-        
-        tempImg.onload = () => {
-            consecutiveErrors = 0;
-            streamRetryCount[streamId] = 0;
-            
-            // Update the actual image element
-            imgElement.src = tempImg.src;
-            imgElement.style.display = 'block';
-            
-            if (placeholder) {
-                placeholder.style.display = 'none';
-            }
-        };
-        
-        tempImg.onerror = () => {
-            consecutiveErrors++;
-            console.warn(`Stream ${streamId}: Frame polling error (${consecutiveErrors}/${maxConsecutiveErrors})`);
-            
-            if (consecutiveErrors >= maxConsecutiveErrors) {
-                console.error(`Stream ${streamId}: Too many errors, checking stream status...`);
-                checkStreamStatus(streamId);
-            }
-        };
-        
-        tempImg.src = frameUrl;
-    }
-    
-    // Start polling at ~15 FPS for smooth playback
-    streamIntervals[streamId] = setInterval(pollFrame, 66);
-    
-    // Initial poll
-    pollFrame();
-}
 
-async function checkStreamStatus(streamId) {
-    try {
-        const response = await fetch(`${API_BASE}/api/stats`);
-        const data = await response.json();
-        
-        const stream = data.streams?.find(s => s.stream_id === streamId);
-        
-        if (!stream || !stream.processing) {
-            console.log(`Stream ${streamId}: Stream is not active, stopping polling`);
-            stopStreamRendering(streamId);
-        } else {
-            // Stream is still active, continue polling
-            streamRetryCount[streamId]++;
+        function hideAuthModal() {
+            document.getElementById('authModal').classList.remove('active');
+            clearAuthError();
+            // Reset forms
+            document.getElementById('loginForm').reset();
+            document.getElementById('signupForm').reset();
+        }
+
+        function switchAuthTab(tab) {
+            const tabs = document.querySelectorAll('.auth-tab');
+            const forms = document.querySelectorAll('.auth-form');
             
-            if (streamRetryCount[streamId] >= MAX_RETRY_COUNT) {
-                console.error(`Stream ${streamId}: Max retries exceeded`);
-                showNotification('error', `Stream ${streamId + 1} connection lost. Please restart the stream.`);
-                stopStreamRendering(streamId);
+            tabs.forEach(t => t.classList.remove('active'));
+            forms.forEach(f => f.classList.remove('active'));
+            
+            if (tab === 'login') {
+                tabs[0].classList.add('active');
+                document.getElementById('loginForm').classList.add('active');
+            } else {
+                tabs[1].classList.add('active');
+                document.getElementById('signupForm').classList.add('active');
+            }
+            clearAuthError();
+        }
+
+        function showAuthError(message) {
+            const errorEl = document.getElementById('authError');
+            document.getElementById('authErrorText').textContent = message;
+            errorEl.classList.add('show');
+        }
+
+        function clearAuthError() {
+            document.getElementById('authError').classList.remove('show');
+        }
+
+        function setButtonLoading(btnId, loading) {
+            const btn = document.getElementById(btnId);
+            if (loading) {
+                btn.disabled = true;
+                btn.innerHTML = '<div class="spinner"></div><span>Please wait...</span>';
+            } else {
+                btn.disabled = false;
+                btn.innerHTML = '<span>' + (btnId.includes('login') ? 'Login' : 'Create Account') + '</span>';
             }
         }
-    } catch (error) {
-        console.error(`Stream ${streamId}: Failed to check status:`, error);
-    }
-}
 
-function stopStreamRendering(streamId) {
-    const imgElement = document.getElementById(`stream${streamId}`);
-    const placeholder = document.getElementById(`placeholder${streamId}`);
-    
-    console.log(`Stopping stream rendering for stream ${streamId}`);
-    
-    // Stop polling interval
-    if (streamIntervals[streamId]) {
-        clearInterval(streamIntervals[streamId]);
-        streamIntervals[streamId] = null;
-    }
-    
-    streamStates[streamId] = false;
-    streamRetryCount[streamId] = 0;
-    
-    if (imgElement) {
-        imgElement.src = '';
-        imgElement.style.display = 'none';
-    }
-    
-    if (placeholder) {
-        placeholder.style.display = 'flex';
-    }
-}
+        async function handleLogin(event) {
+            event.preventDefault();
+            clearAuthError();
+            setButtonLoading('loginSubmitBtn', true);
 
-// ==================== INITIALIZATION ====================
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
 
-document.addEventListener('DOMContentLoaded', () => {
-    initializeApp();
-    setupEventListeners();
-    connectWebSocket();
-    startDataRefresh();
-});
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password })
+                });
 
-function initializeApp() {
-    console.log('Initializing PTU Traffic Monitoring System...');
-    switchPage('home');
-}
+                const data = await response.json();
 
-// ==================== NAVIGATION ====================
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Login failed');
+                }
 
-function setupEventListeners() {
-    // Navbar links
-    document.querySelectorAll('.nav-link').forEach(link => {
-        link.addEventListener('click', (e) => {
-            e.preventDefault();
-            const page = link.getAttribute('data-page');
-            switchPage(page);
+                // Store token and user data
+                authToken = data.access_token;
+                currentUser = data.user;
+                
+                // Save to localStorage
+                localStorage.setItem('authToken', authToken);
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+                // Update UI
+                updateAuthUI();
+                hideAuthModal();
+                showToast(`Welcome back, ${currentUser.username}!`, 'success');
+                
+                // Redirect to analytics page
+                navigateTo('analytics');
+                
+            } catch (error) {
+                showAuthError(error.message);
+            } finally {
+                setButtonLoading('loginSubmitBtn', false);
+            }
+        }
+
+        async function handleSignup(event) {
+            event.preventDefault();
+            clearAuthError();
+            setButtonLoading('signupSubmitBtn', true);
+
+            const full_name = document.getElementById('signupName').value;
+            const username = document.getElementById('signupUsername').value;
+            const email = document.getElementById('signupEmail').value;
+            const password = document.getElementById('signupPassword').value;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/auth/signup`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ username, email, password, full_name })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Signup failed');
+                }
+
+                // Store token and user data
+                authToken = data.access_token;
+                currentUser = data.user;
+                
+                // Save to localStorage
+                localStorage.setItem('authToken', authToken);
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+                // Update UI
+                updateAuthUI();
+                hideAuthModal();
+                showToast(`Welcome to TMS, ${currentUser.username}!`, 'success');
+                
+                // Redirect to analytics page
+                navigateTo('analytics');
+                
+            } catch (error) {
+                showAuthError(error.message);
+            } finally {
+                setButtonLoading('signupSubmitBtn', false);
+            }
+        }
+
+        async function logout() {
+            try {
+                if (authToken) {
+                    await fetch(`${API_BASE_URL}/api/auth/logout`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${authToken}`
+                        }
+                    });
+                }
+            } catch (error) {
+                console.error('Logout error:', error);
+            }
+
+            // Clear local storage and state
+            localStorage.removeItem('authToken');
+            localStorage.removeItem('currentUser');
+            authToken = null;
+            currentUser = null;
+
             
-            // Update active states
-            document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
-            link.classList.add('active');
+            // Stop all streams
+            for (let i = 0; i < 4; i++) {
+                if (streamPollIntervals[i]) {
+                    clearInterval(streamPollIntervals[i]);
+                    delete streamPollIntervals[i];
+                }
+            }
+            
+            // Update UI
+            updateAuthUI();
+            closeUserDropdown();
+            showToast('You have been logged out', 'success');
+            
+            // Redirect to public landing page
+            window.location.href = '/';
+        }
+
+        function updateAuthUI() {
+            const loginBtn = document.getElementById('loginBtn');
+            const userDropdown = document.getElementById('userDropdown');
+            const authRequiredLinks = document.querySelectorAll('.auth-required');
+            const mainContent = document.querySelector('.main-content');
+            
+            if (currentUser && authToken) {
+                // User is logged in
+                if (loginBtn) loginBtn.classList.add('hidden');
+                if (userDropdown) userDropdown.classList.remove('hidden');
+                
+                authRequiredLinks.forEach(link => {
+                    link.style.display = 'flex';
+                });
+                
+                // Update user info
+                if (currentUser.username) {
+                    const initials = currentUser.username.substring(0, 2).toUpperCase();
+                    const avatarEl = document.getElementById('userAvatar');
+                    if (avatarEl) avatarEl.textContent = initials;
+                }
+                const nameEl = document.getElementById('userDisplayName');
+                const emailEl = document.getElementById('userDisplayEmail');
+                if (nameEl) nameEl.textContent = currentUser.full_name || currentUser.username || 'User';
+                if (emailEl) emailEl.textContent = currentUser.email || '';
+
+                // Unlock the dashboard content
+                if (mainContent) mainContent.classList.remove('blurred');
+            } else {
+                // User is not logged in
+                if (loginBtn) loginBtn.classList.remove('hidden');
+                if (userDropdown) userDropdown.classList.add('hidden');
+                
+                authRequiredLinks.forEach(link => {
+                    link.style.display = 'none';
+                });
+
+                // Lock/blur the dashboard content until login
+                if (mainContent) mainContent.classList.add('blurred');
+            }
+        }
+
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            dropdown.classList.toggle('active');
+        }
+
+        function closeUserDropdown() {
+            document.getElementById('userDropdown').classList.remove('active');
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('userDropdown');
+            if (dropdown && !dropdown.contains(event.target)) {
+                closeUserDropdown();
+            }
         });
-    });
-    
-    // Sidebar menu items
-    document.querySelectorAll('.menu-item').forEach(item => {
-        item.addEventListener('click', () => {
-            const page = item.getAttribute('data-page');
-            switchPage(page);
+
+        // Close auth modal when clicking outside
+        document.getElementById('authModal').addEventListener('click', function(event) {
+            if (event.target === this) {
+                hideAuthModal();
+            }
+        });
+
+        // Check for existing auth on page load
+        function checkExistingAuth() {
+            const savedToken = localStorage.getItem('authToken');
+            const savedUser = localStorage.getItem('currentUser');
             
-            // Update active states
-            document.querySelectorAll('.menu-item').forEach(i => i.classList.remove('active'));
-            item.classList.add('active');
+            if (savedToken && savedUser) {
+                authToken = savedToken;
+                currentUser = JSON.parse(savedUser);
+                
+                // Verify token is still valid
+                verifyToken();
+                
+                // Ensure dashboard UI is in authenticated state
+                updateAuthUI();
+            } else {
+                // Not authenticated: lock dashboard and prompt for login
+                updateAuthUI();
+                showToast('Please login to access the dashboard', 'error');
+                showAuthModal();
+            }
+        }
+
+        async function verifyToken() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/auth/verify`, {
+                    headers: {
+                        'Authorization': `Bearer ${authToken}`
+                    }
+                });
+                
+                if (!response.ok) {
+                    // Token is invalid, clear auth
+                    localStorage.removeItem('authToken');
+                    localStorage.removeItem('currentUser');
+                    authToken = null;
+                    currentUser = null;
+                    updateAuthUI();
+                    return false;
+                }
+                return true;
+            } catch (error) {
+                console.error('Token verification error:', error);
+                return false;
+            }
+        }
+
+        // Navigate to a page
+        function navigateTo(pageId) {
+            // Check authentication for protected pages
+            const authRequiredPages = ['analytics', 'monitoring', 'violations', 'about'];
             
-            // Update navbar active state
+            if (authRequiredPages.includes(pageId) && (!currentUser || !authToken)) {
+                showToast('Please login to access this page', 'error');
+                showAuthModal();
+                return;
+            }
+            
+            // Update navigation
+            document.querySelectorAll('.nav-link').forEach(l => l.classList.remove('active'));
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            
+            const navLink = document.querySelector(`[data-page="${pageId}"]`);
+            if (navLink) navLink.classList.add('active');
+            
+            const targetPage = document.getElementById(pageId);
+            if (targetPage) {
+                targetPage.classList.add('active');
+            }
+            
+            closeUserDropdown();
+            
+            // Load page-specific data
+            if (pageId === 'violations') {
+                updateViolationsPage();
+            }
+            
+            if (pageId === 'analytics' || pageId === 'monitoring') {
+                updateSystemStats();
+            }
+        }
+
+        // ==================== CHARTS (ANALYTICS) ====================
+        function initCharts() {
+            const ctxViolationsByType = document.getElementById('violationsByTypeChart');
+            const ctxStreamsVehicles = document.getElementById('streamsVehiclesChart');
+            const ctxViolationsOverTime = document.getElementById('violationsOverTimeChart');
+
+            if (ctxViolationsByType && window.Chart) {
+                violationsByTypeChart = new Chart(ctxViolationsByType, {
+                    type: 'bar',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Violations',
+                            data: [],
+                            backgroundColor: 'rgba(6, 182, 212, 0.6)',
+                            borderColor: 'rgba(6, 182, 212, 1)',
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { display: false } },
+                        scales: {
+                            x: { ticks: { color: '#cbd5e1' } },
+                            y: { ticks: { color: '#cbd5e1' }, beginAtZero: true }
+                        }
+                    }
+                });
+            }
+
+            if (ctxStreamsVehicles && window.Chart) {
+                streamsVehiclesChart = new Chart(ctxStreamsVehicles, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Active Streams', 'Total Vehicles'],
+                        datasets: [{
+                            data: [0, 0],
+                            backgroundColor: [
+                                'rgba(16, 185, 129, 0.7)',
+                                'rgba(59, 130, 246, 0.7)'
+                            ],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: {
+                                labels: { color: '#cbd5e1' }
+                            }
+                        }
+                    }
+                });
+            }
+
+            if (ctxViolationsOverTime && window.Chart) {
+                violationsOverTimeChart = new Chart(ctxViolationsOverTime, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Violations',
+                            data: [],
+                            borderColor: 'rgba(239, 68, 68, 1)',
+                            backgroundColor: 'rgba(239, 68, 68, 0.3)',
+                            tension: 0.3,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: { labels: { color: '#cbd5e1' } }
+                        },
+                        scales: {
+                            x: { ticks: { color: '#cbd5e1' } },
+                            y: { ticks: { color: '#cbd5e1' }, beginAtZero: true }
+                        }
+                    }
+                });
+            }
+        }
+
+        function updateChartsFromStats(data) {
+            if (!data) return;
+
+            // Violations by type (from summary)
+            if (violationsByTypeChart && data.violation_summary) {
+                const labels = Object.keys(data.violation_summary);
+                const values = labels.map(k => data.violation_summary[k] || 0);
+                violationsByTypeChart.data.labels = labels.map(l => l.replace('_', ' ').toUpperCase());
+                violationsByTypeChart.data.datasets[0].data = values;
+                violationsByTypeChart.update();
+            }
+
+            // Streams & vehicles
+            if (streamsVehiclesChart) {
+                streamsVehiclesChart.data.datasets[0].data = [
+                    data.active_streams || 0,
+                    data.total_vehicles || 0
+                ];
+                streamsVehiclesChart.update();
+            }
+
+            // Violations over time (simple bucketing by time string)
+            if (violationsOverTimeChart && Array.isArray(data.violations)) {
+                const buckets = {};
+                data.violations.forEach(v => {
+                    if (!v.timestamp) return;
+                    const d = new Date(v.timestamp);
+                    if (isNaN(d.getTime())) return;
+                    const key = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    buckets[key] = (buckets[key] || 0) + 1;
+                });
+                const labels = Object.keys(buckets).sort();
+                const values = labels.map(k => buckets[k]);
+                violationsOverTimeChart.data.labels = labels;
+                violationsOverTimeChart.data.datasets[0].data = values;
+                violationsOverTimeChart.update();
+            }
+        }
+
+        // ==================== UTILITY FUNCTIONS ====================
+        
+        function getAuthHeaders() {
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            if (authToken) {
+                headers['Authorization'] = `Bearer ${authToken}`;
+            }
+            return headers;
+        }
+        
+        function showToast(message, type = 'success ') {
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        function formatTime(isoString) {
+            if (!isoString) return 'N/A';
+            const date = new Date(isoString);
+            return date.toLocaleTimeString();
+        }
+
+        function formatSpeed(speed) {
+            return speed ? `${speed.toFixed(1)} km/h` : 'N/A';
+        }
+
+        // ==================== STREAM MANAGEMENT ====================
+        function startStream(index) {
+            const url = document.getElementById('streamUrl' + index).value;
+            if (!url) {
+                showToast('Please enter a stream URL', 'error');
+                return;
+            }
+
+            console.log(`Starting stream ${index} with URL:`, url);
+            showToast(`Starting stream ${index + 1}...`, 'info');
+
+            fetch(`${API_BASE_URL}/api/start-stream/${index}?stream_url=${encodeURIComponent(url)}`, {
+                method: 'POST',
+                headers: getAuthHeaders()
+            })
+            .then(async r => {
+                const data = await r.json();
+                if (!r.ok) {
+                    throw new Error(data.detail || `Server returned ${r.status}`);
+                }
+                return data;
+            })
+            .then(data => {
+                console.log(`Stream ${index} started successfully:`, data);
+                showToast(`Stream ${index + 1} started successfully!`, 'success');
+                updateStreamStatus(index);
+                pollStreamFrame(index);
+            })
+            .catch(err => {
+                console.error(`Failed to start stream ${index}:`, err);
+                showToast(`Failed to start stream: ${err.message}`, 'error');
+            });
+        }
+
+        function stopStream(index) {
+            fetch(`${API_BASE_URL}/api/stop-stream/${index}`, { 
+                method: 'POST',
+                headers: getAuthHeaders()
+            })
+            .then(r => r.json())
+            .then(data => {
+                showToast(`Stream ${index + 1} stopped`, 'success');
+                document.getElementById('stream' + index).style.display = 'none';
+                document.getElementById('placeholder' + index).style.display = 'flex';
+                document.getElementById('status' + index).textContent = 'Inactive';
+                document.getElementById('status' + index).className = 'status-badge inactive';
+                
+                if (streamPollIntervals[index]) {
+                    clearInterval(streamPollIntervals[index]);
+                    delete streamPollIntervals[index];
+                }
+            })
+            .catch(err => showToast(`Failed to stop stream: ${err.message}`, 'error'));
+        }
+
+        function updateStreamStatus(index) {
+            // This will be called after stream starts
+            document.getElementById('status' + index).textContent = 'Active';
+            document.getElementById('status' + index).className = 'status-badge active';
+        }
+
+        function pollStreamFrame(index) {
+            if (streamPollIntervals[index]) {
+                clearInterval(streamPollIntervals[index]);
+            }
+
+            streamPollIntervals[index] = setInterval(() => {
+                fetch(`${API_BASE_URL}/stream/${index}/frame`)
+                    .then(r => r.blob())
+                    .then(blob => {
+                        const url = URL.createObjectURL(blob);
+                        const img = document.getElementById('stream' + index);
+                        const placeholder = document.getElementById('placeholder' + index);
+                        img.src = url;
+                        img.style.display = 'block';
+                        placeholder.style.display = 'none';
+                    })
+                    .catch(err => console.error(`Error polling stream ${index}:`, err));
+            }, STREAM_POLL_INTERVAL);
+        }
+
+        // ==================== FILE UPLOAD ====================
+        function setupFileUpload(index) {
+            const fileInput = document.getElementById('videoFile' + index);
+            const uploadBox = document.querySelector(`[for="videoFile${index}"]`).parentElement.querySelector('.stream-upload-box');
+            const uploadLabel = document.querySelector(`[for="videoFile${index}"]`);
+            const selectedFile = document.getElementById('selectedFile' + index);
+            const fileName = document.getElementById('fileName' + index);
+
+            fileInput.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    fileName.textContent = file.name;
+                    selectedFile.style.display = 'flex';
+                }
+            });
+
+            uploadLabel.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                uploadBox.style.borderColor = 'var(--accent)';
+                uploadBox.style.background = 'rgba(6, 182, 212, 0.15)';
+            });
+
+            uploadLabel.addEventListener('dragleave', () => {
+                uploadBox.style.borderColor = 'var(--border-color)';
+                uploadBox.style.background = 'rgba(6, 182, 212, 0.02)';
+            });
+
+            uploadLabel.addEventListener('drop', (e) => {
+                e.preventDefault();
+                uploadBox.style.borderColor = 'var(--border-color)';
+                uploadBox.style.background = 'rgba(6, 182, 212, 0.02)';
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    fileInput.files = files;
+                    const event = new Event('change', { bubbles: true });
+                    fileInput.dispatchEvent(event);
+                }
+            });
+        }
+
+        function clearStreamFile(index) {
+            document.getElementById('videoFile' + index).value = '';
+            document.getElementById('selectedFile' + index).style.display = 'none';
+        }
+
+        function uploadStreamVideo(index) {
+            const fileInput = document.getElementById('videoFile' + index);
+            const file = fileInput.files[0];
+            
+            if (!file) {
+                showToast('Please select a video file', 'error');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            const headers = {};
+            if (authToken) {
+                headers['Authorization'] = `Bearer ${authToken}`;
+            }
+
+            fetch(`${API_BASE_URL}/api/upload-video/${index}`, {
+                method: 'POST',
+                headers: headers,
+                body: formData
+            })
+            .then(r => r.json())
+            .then(data => {
+                showToast(`Video uploading and processing started for Stream ${index + 1}`, 'success');
+                clearStreamFile(index);
+                updateStreamStatus(index);
+                pollStreamFrame(index);
+            })
+            .catch(err => showToast(`Upload failed: ${err.message}`, 'error'));
+        }
+
+        // ==================== STATS AND VIOLATIONS ====================
+        async function updateSystemStats() {
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/stats`);
+                const data = await response.json();
+                systemStats = data;
+
+                // Update analytics summary cards (all-time baseline)
+                document.getElementById('activeStreams').textContent = data.active_streams;
+                document.getElementById('totalVehicles').textContent = data.total_vehicles;
+                document.getElementById('totalViolations').textContent = data.total_violations;
+                document.getElementById('notificationBadge').textContent = data.total_violations;
+                
+                // Count violation types
+                const summary = data.violation_summary || {};
+                document.getElementById('speedViolations').textContent = summary.speed || 0;
+
+                // Update recent violations table (all-time baseline)
+                updateViolationsTable((data.violations || []).slice(0, 10));
+
+                // Update analytics charts with baseline stats
+                updateChartsFromStats(data);
+
+            } catch (err) {
+                console.error('Error fetching stats:', err);
+            }
+        }
+
+        function updateViolationsTable(violations) {
+            const tbody = document.getElementById('violationsTableBody');
+            
+            if (!violations || violations.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-state"><i class="fas fa-inbox"></i><p>No violations</p></td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = violations.map(v => `
+                <tr>
+                    <td>Stream ${v.stream_id}</td>
+                    <td>${v.violation_type.replace('_', ' ').toUpperCase()}</td>
+                    <td>${formatSpeed(v.speed_kmh)}</td>
+                    <td>${formatTime(v.timestamp)}</td>
+                </tr>
+            `).join('');
+        }
+
+        async function updateViolationsPage() {
+            const dateFilterSelect = document.getElementById('violationDateFilter');
+            const dateRange = dateFilterSelect ? dateFilterSelect.value : 'all';
+            const queryRange = dateRange === 'all' ? '' : `&date_range=${encodeURIComponent(dateRange)}`;
+
+            // Try to fetch from database first with date filter
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/db/violations?limit=200${queryRange}`, {
+                    headers: getAuthHeaders()
+                });
+                const data = await response.json();
+                
+                if (data.violations && data.violations.length > 0) {
+                    // Count violations by type
+                    const counts = {
+                        speed: 0,
+                        red_light: 0,
+                        stop_line: 0,
+                        lane_change: 0,
+                        unsafe_distance: 0
+                    };
+                    
+                    data.violations.forEach(v => {
+                        if (counts.hasOwnProperty(v.violation_type)) {
+                            counts[v.violation_type]++;
+                        }
+                    });
+
+                    document.getElementById('speedViolationCount').textContent = counts.speed;
+                    document.getElementById('redLightCount').textContent = counts.red_light;
+                    document.getElementById('stopLineCount').textContent = counts.stop_line || counts.unsafe_distance;
+                    document.getElementById('laneChangeCount').textContent = counts.lane_change;
+
+                    const tbody = document.getElementById('allViolationsTable');
+                    tbody.innerHTML = data.violations.map(v => `
+                        <tr>
+                            <td>Stream ${v.stream_id}</td>
+                            <td>${v.violation_type.replace('_', ' ').toUpperCase()}</td>
+                            <td>${formatSpeed(v.speed_kmh)}</td>
+                            <td>${v.signal_state || 'N/A'}</td>
+                            <td>${formatTime(v.timestamp)}</td>
+                        </tr>
+                    `).join('');
+                    return;
+                }
+            } catch (err) {
+                console.error('Error fetching from DB:', err);
+            }
+
+            // Fallback to in-memory stats (also apply date filter on client side)
+            if (!systemStats.violations) return;
+
+            let filteredViolations = systemStats.violations;
+            if (dateRange !== 'all') {
+                const now = new Date();
+                let startTime = null;
+                let endTime = null;
+
+                if (dateRange === 'yesterday') {
+                    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    startTime = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+                    endTime = todayStart;
+                } else if (dateRange === 'last_week') {
+                    startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                } else if (dateRange === 'last_month') {
+                    startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                } else if (dateRange === 'last_year') {
+                    startTime = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+                }
+
+                if (startTime) {
+                    filteredViolations = filteredViolations.filter(v => {
+                        if (!v.timestamp) return false;
+                        const d = new Date(v.timestamp);
+                        if (isNaN(d.getTime())) return false;
+                        if (endTime) {
+                            return d >= startTime && d < endTime;
+                        }
+                        return d >= startTime;
+                    });
+                }
+            }
+
+            const summary = systemStats.violation_summary || {};
+            document.getElementById('speedViolationCount').textContent = summary.speed || 0;
+            document.getElementById('redLightCount').textContent = summary.red_light || 0;
+            document.getElementById('stopLineCount').textContent = summary.stop_line || 0;
+            document.getElementById('laneChangeCount').textContent = summary.lane_change || 0;
+
+            const tbody = document.getElementById('allViolationsTable');
+            if (!filteredViolations || filteredViolations.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="empty-state"><i class="fas fa-inbox"></i><p>No violations</p></td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = filteredViolations.map(v => `
+                <tr>
+                    <td>Stream ${v.stream_id}</td>
+                    <td>${v.violation_type.replace('_', ' ').toUpperCase()}</td>
+                    <td>${formatSpeed(v.speed_kmh)}</td>
+                    <td>${v.signal_state || 'N/A'}</td>
+                    <td>${formatTime(v.timestamp)}</td>
+                </tr>
+            `).join('');
+        }
+
+        // ==================== WEBSOCKET CONNECTION ====================
+        function connectWebSocket() {
+            // Use the configured WebSocket URL
+            const wsUrl = `${WS_BASE_URL}/ws`;
+            console.log('🔌 Connecting to WebSocket:', wsUrl);
+            
+            const ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                console.log('✅ WebSocket connected');
+                showToast('Connected to backend');
+            };
+
+            ws.onmessage = (event) => {
+                const message = JSON.parse(event.data);
+                
+                if (message.type === 'violation') {
+                    // New violation detected
+                    updateSystemStats();
+                    showToast(`Violation detected: ${message.data.violation_type}`, 'error');
+                } else if (message.type === 'stats_update') {
+                    systemStats = message.data;
+                    updateSystemStats();
+                }
+            };
+
+            ws.onerror = (error) => {
+                console.error('❌ WebSocket error:', error);
+                showToast('Connection error', 'error');
+            };
+
+            ws.onclose = () => {
+                console.log('⚠️ WebSocket disconnected, reconnecting in 3s...');
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+
+        // ==================== ANALYTICS RANGE ====================
+        async function updateAnalyticsRange() {
+            const select = document.getElementById('analyticsDateFilter');
+            analyticsDateRange = select ? select.value : 'all';
+
+            const queryRange = analyticsDateRange === 'all'
+                ? ''
+                : `&date_range=${encodeURIComponent(analyticsDateRange)}`;
+
+            // Try DB first for precise history
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/db/violations?limit=500${queryRange}`, {
+                    headers: getAuthHeaders()
+                });
+                const data = await response.json();
+
+                if (data.violations && data.violations.length > 0) {
+                    const violations = data.violations;
+
+                    // Build summary from filtered history
+                    const summary = {
+                        speed: 0,
+                        red_light: 0,
+                        stop_line: 0,
+                        lane_change: 0,
+                        unsafe_distance: 0
+                    };
+                    violations.forEach(v => {
+                        if (summary.hasOwnProperty(v.violation_type)) {
+                            summary[v.violation_type]++;
+                        }
+                    });
+
+                    // Update summary cards (filtered history for violations)
+                    document.getElementById('totalViolations').textContent = violations.length;
+                    document.getElementById('speedViolations').textContent = summary.speed || 0;
+
+                    // Update recent violations table from filtered data
+                    updateViolationsTable(violations.slice(0, 10));
+
+                    // Update charts using filtered data
+                    const statsLike = Object.assign({}, systemStats, {
+                        violation_summary: summary,
+                        violations: violations
+                    });
+                    updateChartsFromStats(statsLike);
+                    return;
+                }
+            } catch (err) {
+                console.error('Error updating analytics range from DB:', err);
+            }
+
+            // Fallback: filter in-memory violations
+            if (!systemStats.violations) return;
+
+            let filteredViolations = systemStats.violations;
+            if (analyticsDateRange !== 'all') {
+                const now = new Date();
+                let startTime = null;
+                let endTime = null;
+
+                if (analyticsDateRange === 'yesterday') {
+                    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+                    startTime = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+                    endTime = todayStart;
+                } else if (analyticsDateRange === 'last_week') {
+                    startTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                } else if (analyticsDateRange === 'last_month') {
+                    startTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+                } else if (analyticsDateRange === 'last_year') {
+                    startTime = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+                }
+
+                if (startTime) {
+                    filteredViolations = filteredViolations.filter(v => {
+                        if (!v.timestamp) return false;
+                        const d = new Date(v.timestamp);
+                        if (isNaN(d.getTime())) return false;
+                        if (endTime) {
+                            return d >= startTime && d < endTime;
+                        }
+                        return d >= startTime;
+                    });
+                }
+            }
+
+            const summary = {
+                speed: 0,
+                red_light: 0,
+                stop_line: 0,
+                lane_change: 0,
+                unsafe_distance: 0
+            };
+            filteredViolations.forEach(v => {
+                if (summary.hasOwnProperty(v.violation_type)) {
+                    summary[v.violation_type]++;
+                }
+            });
+
+            document.getElementById('totalViolations').textContent = filteredViolations.length;
+            document.getElementById('speedViolations').textContent = summary.speed || 0;
+
+            updateViolationsTable(filteredViolations.slice(0, 10));
+
+            const statsLike = Object.assign({}, systemStats, {
+                violation_summary: summary,
+                violations: filteredViolations
+            });
+            updateChartsFromStats(statsLike);
+        }
+
+        // ==================== INITIALIZATION ====================
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('✅ DOM Content Loaded - Initializing...');
+            
+            // Setup navigation links
             document.querySelectorAll('.nav-link').forEach(link => {
-                link.classList.remove('active');
-                if (link.getAttribute('data-page') === page) {
-                    link.classList.add('active');
+                link.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const pageId = this.getAttribute('data-page');
+                    console.log('Navigation clicked:', pageId);
+                    navigateTo(pageId);
+                });
+            });
+
+            // Initialize analytics charts
+            initCharts();
+            
+            // Check for existing authentication
+            checkExistingAuth();
+            
+            // Setup file uploads for all streams
+            for (let i = 0; i < 4; i++) {
+                setupFileUpload(i);
+            }
+
+            // Initial stats load
+            updateSystemStats();
+
+            // Start periodic updates
+            pollInterval = setInterval(updateSystemStats, POLL_INTERVAL);
+
+            // Connect WebSocket for real-time updates
+            connectWebSocket();
+
+            // Cleanup on page unload
+            window.addEventListener('beforeunload', () => {
+                if (pollInterval) clearInterval(pollInterval);
+                Object.values(streamPollIntervals).forEach(interval => clearInterval(interval));
+            });
+
+            // Keyboard shortcuts
+            document.addEventListener('keydown', function(e) {
+                // Escape to close modal
+                if (e.key === 'Escape') {
+                    hideAuthModal();
+                    closeUserDropdown();
                 }
             });
         });
-    });
-}
-
-function switchPage(pageName) {
-    // Hide all pages
-    document.querySelectorAll('.page').forEach(page => {
-        page.classList.remove('active');
-    });
-    
-    // Show selected page
-    const targetPage = document.getElementById(`${pageName}Page`);
-    if (targetPage) {
-        targetPage.classList.add('active');
-        
-        // Load page-specific data
-        if (pageName === 'violations') {
-            loadViolations();
-        }
-    }
-}
-
-// ==================== WEBSOCKET CONNECTION ====================
-
-function connectWebSocket() {
-    const wsUrl = `${WS_BASE}/ws`;
-    
-    try {
-        ws = new WebSocket(wsUrl);
-        
-        ws.onopen = () => {
-            console.log('WebSocket connected to:', wsUrl);
-            updateConnectionStatus(true);
-        };
-        
-        ws.onmessage = (event) => {
-            const data = JSON.parse(event.data);
-            handleWebSocketMessage(data);
-        };
-        
-        ws.onclose = () => {
-            console.log('WebSocket disconnected');
-            updateConnectionStatus(false);
-            // Reconnect after 3 seconds
-            setTimeout(connectWebSocket, 3000);
-        };
-        
-        ws.onerror = (error) => {
-            console.error('WebSocket error:', error);
-            updateConnectionStatus(false);
-        };
-    } catch (error) {
-        console.error('Failed to connect WebSocket:', error);
-        updateConnectionStatus(false);
-    }
-}
-
-function handleWebSocketMessage(data) {
-    if (data.type === 'stats_update') {
-        updateDashboard(data.data);
-    } else if (data.type === 'violation') {
-        addNewViolation(data.data);
-    }
-}
-
-function addNewViolation(violation) {
-    console.log('New violation detected:', violation);
-    
-    // Add to violations array
-    allViolations.unshift(violation);
-    
-    // Map violation types to display info
-    const violationTypeMap = {
-        'speed': { label: 'Speed', isSpeed: true },
-        'red_light': { label: 'Red Light', isSpeed: false },
-        'stop_line': { label: 'Stop Line', isSpeed: false },
-        'lane_change': { label: 'Lane Change', isSpeed: false },
-        'wrong_lane': { label: 'Wrong Lane', isSpeed: false },
-        'unsafe_distance': { label: 'Unsafe Distance', isSpeed: false }
-    };
-    
-    const vType = violation.violation_type || 'speed';
-    const typeInfo = violationTypeMap[vType] || { label: 'Violation', isSpeed: false };
-    
-    let details = `${violation.vehicle_class || 'Vehicle'}`;
-    if (vType === 'speed' && violation.speed_kmh) {
-        details += ` - ${violation.speed_kmh} km/h`;
-        if (violation.speed_limit) {
-            details += ` (Limit: ${violation.speed_limit} km/h)`;
-        }
-    } else if ((vType === 'red_light' || vType === 'stop_line') && violation.signal_state) {
-        details += ` - Crossed during ${violation.signal_state} light`;
-    }
-    
-    showNotification('error', `${typeInfo.label} Violation Detected! Stream ${(violation.stream_id || 0) + 1} - ${details}`);
-    
-    // Update notification badge
-    const badge = document.getElementById('notificationBadge');
-    if (badge) {
-        const current = parseInt(badge.textContent) || 0;
-        badge.textContent = current + 1;
-    }
-    
-    // Update violation counters
-    const totalElement = document.getElementById('totalViolations');
-    if (totalElement) {
-        const current = parseInt(totalElement.textContent) || 0;
-        updateElement('totalViolations', current + 1);
-    }
-    
-    if (typeInfo.isSpeed) {
-        const speedElement = document.getElementById('speedViolations');
-        if (speedElement) {
-            const current = parseInt(speedElement.textContent) || 0;
-            updateElement('speedViolations', current + 1);
-        }
-    } else {
-        const signalElement = document.getElementById('signalViolations');
-        if (signalElement) {
-            const current = parseInt(signalElement.textContent) || 0;
-            updateElement('signalViolations', current + 1);
-        }
-    }
-    
-    // Update violations page summary if on that page
-    const violationTotal = document.getElementById('violationTotal');
-    if (violationTotal) {
-        const current = parseInt(violationTotal.textContent) || 0;
-        updateElement('violationTotal', current + 1);
-    }
-    
-    if (typeInfo.isSpeed) {
-        const speedCount = document.getElementById('violationSpeed');
-        if (speedCount) {
-            const current = parseInt(speedCount.textContent) || 0;
-            updateElement('violationSpeed', current + 1);
-        }
-    } else {
-        const signalCount = document.getElementById('violationSignal');
-        if (signalCount) {
-            const current = parseInt(signalCount.textContent) || 0;
-            updateElement('violationSignal', current + 1);
-        }
-    }
-    
-    // Check if violation is today
-    const today = new Date().toDateString();
-    const vDate = new Date(violation.timestamp).toDateString();
-    if (vDate === today) {
-        const todayCount = document.getElementById('violationToday');
-        if (todayCount) {
-            const current = parseInt(todayCount.textContent) || 0;
-            updateElement('violationToday', current + 1);
-        }
-    }
-    
-    // Refresh violations if on violations page
-    if (document.getElementById('violationsPage').classList.contains('active')) {
-        updateViolationsTable(allViolations);
-    }
-    
-    // Refresh recent violations on home page
-    updateRecentViolations(allViolations.slice(0, 5));
-}
-
-function updateConnectionStatus(connected) {
-    const indicator = document.getElementById('statusIndicator');
-    const text = document.getElementById('statusText');
-    
-    if (connected) {
-        indicator.style.background = 'var(--primary-green)';
-        text.textContent = 'Connected';
-    } else {
-        indicator.style.background = 'var(--primary-red)';
-        text.textContent = 'Disconnected';
-    }
-}
-
-// ==================== DATA REFRESH ====================
-
-async function startDataRefresh() {
-    // Initial load
-    await fetchStats();
-    
-    // Refresh every 2 seconds
-    setInterval(fetchStats, 2000);
-}
-
-async function fetchStats() {
-    try {
-        const response = await fetch(`${API_BASE}/api/stats`);
-        const data = await response.json();
-        updateDashboard(data);
-    } catch (error) {
-        console.error('Error fetching stats:', error);
-    }
-}
-
-// ==================== DASHBOARD UPDATES ====================
-
-function updateDashboard(data) {
-    // Update surveillance status cards
-    const totalStreams = data.total_streams || 4;
-    const activeStreams = data.active_streams || 0;
-    const inactiveStreams = totalStreams - activeStreams;
-    const maintenanceStreams = 0; // Can be calculated based on stream status
-    
-    updateElement('totalStreams', totalStreams);
-    updateElement('activeStreams', activeStreams);
-    updateElement('inactiveStreams', inactiveStreams);
-    updateElement('maintenanceStreams', maintenanceStreams);
-    
-    // Update traffic analytics
-    const violationSummary = data.violation_summary || {};
-    const speedViolations = (violationSummary.speed || 0);
-    const redLightViolations = (violationSummary.red_light || 0);
-    const stopLineViolations = (violationSummary.stop_line || 0);
-    const laneViolations = (violationSummary.lane_change || 0);
-    const wrongLaneViolations = (violationSummary.wrong_lane || 0);
-    const distanceViolations = (violationSummary.unsafe_distance || 0);
-    
-    const totalViolations = data.total_violations || 0;
-    const signalViolations = redLightViolations + stopLineViolations;
-    
-    updateElement('totalVehicles', data.total_vehicles || 0);
-    updateElement('totalViolations', totalViolations);
-    updateElement('speedViolations', speedViolations);
-    updateElement('signalViolations', signalViolations);
-    
-    // Update notification badge
-    updateElement('notificationBadge', totalViolations);
-    
-    // Update stream-specific data
-    if (data.streams) {
-        data.streams.forEach(stream => {
-            updateStreamData(stream);
-        });
-    }
-    
-    // Update recent violations
-    if (data.violations) {
-        updateRecentViolations(data.violations.slice(0, 5));
-        allViolations = data.violations;
-    }
-    
-    // Update violations page if active
-    if (document.getElementById('violationsPage').classList.contains('active')) {
-        updateViolationsTable(data.violations || []);
-    }
-}
-
-function updateStreamData(stream) {
-    const streamId = stream.stream_id;
-    
-    // Update stream status badge
-    const statusElement = document.getElementById(`status${streamId}`);
-    if (statusElement) {
-        if (stream.processing) {
-            statusElement.textContent = 'Active';
-            statusElement.classList.add('active');
-        } else {
-            statusElement.textContent = 'Inactive';
-            statusElement.classList.remove('active');
-        }
-    }
-    
-    // Update video feed
-    const videoFeed = document.getElementById(`stream${streamId}`);
-    const placeholder = document.getElementById(`placeholder${streamId}`);
-    const liveBadge = document.getElementById(`live${streamId}`);
-    
-    if (stream.processing && videoFeed) {
-        // Start stream rendering if not already started
-        // Check for false specifically (could be 'polling' or other truthy value)
-        if (streamStates[streamId] === false || streamStates[streamId] === undefined) {
-            console.log(`Dashboard: Starting stream ${streamId} rendering`);
-            // Small delay to ensure backend is ready
-            setTimeout(() => {
-                startStreamRendering(streamId);
-            }, 500);
-        }
-        if (liveBadge) liveBadge.style.display = 'flex';
-    } else if (videoFeed) {
-        // Stop stream rendering if stream is not processing
-        if (streamStates[streamId] && streamStates[streamId] !== false) {
-            console.log(`Dashboard: Stopping stream ${streamId} rendering`);
-            stopStreamRendering(streamId);
-        }
-        if (liveBadge) liveBadge.style.display = 'none';
-    }
-    
-    // Update stream stats
-    const statsContainer = document.getElementById(`stats${streamId}`);
-    if (statsContainer) {
-        const statElements = statsContainer.querySelectorAll('.stat span');
-        if (statElements.length >= 3) {
-            statElements[0].textContent = stream.total_vehicles || 0;
-            statElements[1].textContent = Math.round(stream.average_speed || 0);
-            
-            // Sum all violation types
-            const violationCounts = stream.violation_counts || {};
-            const totalStreamViolations = Object.values(violationCounts).reduce((sum, count) => sum + count, 0);
-            statElements[2].textContent = totalStreamViolations;
-        }
-    }
-}
-
-function updateRecentViolations(violations) {
-    const container = document.getElementById('recentViolationsList');
-    
-    if (!violations || violations.length === 0) {
-        container.innerHTML = `
-            <div class="empty-state">
-                <i class="fas fa-check-circle"></i>
-                <p>No violations detected</p>
-            </div>
-        `;
-        return;
-    }
-    
-    container.innerHTML = violations.map(v => {
-        // Map violation types to display info
-        const violationTypeMap = {
-            'speed': { icon: 'fa-tachometer-alt', label: 'Speed' },
-            'red_light': { icon: 'fa-traffic-light', label: 'Red Light' },
-            'stop_line': { icon: 'fa-hand-paper', label: 'Stop Line' },
-            'lane_change': { icon: 'fa-road', label: 'Lane Change' },
-            'wrong_lane': { icon: 'fa-directions', label: 'Wrong Lane' },
-            'unsafe_distance': { icon: 'fa-compress-arrows-alt', label: 'Unsafe Distance' }
-        };
-        
-        const vType = v.violation_type || 'speed';
-        const typeInfo = violationTypeMap[vType] || { icon: 'fa-exclamation-triangle', label: 'Violation' };
-        const icon = typeInfo.icon;
-        const label = typeInfo.label;
-        
-        const title = `${label} Violation`;
-        let details = `Stream ${(v.stream_id || 0) + 1} • ${v.vehicle_class || 'Vehicle'} • Track ID: ${v.track_id}`;
-        
-        if (vType === 'speed' && v.speed_kmh) {
-            details += ` • ${v.speed_kmh} km/h`;
-        }
-        
-        const time = formatTime(v.timestamp);
-        const cssClass = vType === 'speed' ? 'speed' : 'signal';
-        
-        return `
-            <div class="violation-item ${cssClass}">
-                <div class="violation-info">
-                    <div class="violation-icon">
-                        <i class="fas ${icon}"></i>
-                    </div>
-                    <div class="violation-details">
-                        <h4>${title}</h4>
-                        <p>${details}</p>
-                    </div>
-                </div>
-                <div class="violation-meta">
-                    <span class="violation-time">${time}</span>
-                </div>
-            </div>
-        `;
-    }).join('');
-}
-
-// ==================== STREAM CONTROL ====================
-
-async function startStream(streamId) {
-    const urlInput = document.getElementById(`url${streamId}`);
-    const streamUrl = urlInput.value.trim();
-    
-    if (!streamUrl) {
-        showNotification('warning', 'Please enter a video URL or YouTube link');
-        return;
-    }
-    
-    try {
-        showNotification('info', `Starting stream ${streamId + 1}...`);
-        
-        const response = await fetch(`${API_BASE}/api/start-stream/${streamId}?stream_url=${encodeURIComponent(streamUrl)}`, {
-            method: 'POST'
-        });
-        
-        if (response.ok) {
-            console.log(`Stream ${streamId} started`);
-            showNotification('success', `Stream ${streamId + 1} started successfully`);
-            
-            // Reset stream state to allow fresh connection
-            streamStates[streamId] = false;
-            streamRetryCount[streamId] = 0;
-            
-            // Give backend time to initialize, then start rendering
-            setTimeout(() => {
-                startStreamRendering(streamId);
-            }, 1000);
-        } else {
-            const error = await response.json();
-            showNotification('error', `Failed to start stream: ${error.detail}`);
-        }
-    } catch (error) {
-        console.error('Error starting stream:', error);
-        showNotification('error', 'Failed to start stream');
-    }
-}
-
-async function stopStream(streamId) {
-    try {
-        const response = await fetch(`${API_BASE}/api/stop-stream/${streamId}`, {
-            method: 'POST'
-        });
-        
-        if (response.ok) {
-            console.log(`Stream ${streamId} stopped`);
-            showNotification('info', `Stream ${streamId + 1} stopped`);
-            
-            // Stop stream rendering
-            stopStreamRendering(streamId);
-            
-            // Clear file input and related UI
-            const fileInput = document.getElementById(`file${streamId}`);
-            const fileName = document.getElementById(`fileName${streamId}`);
-            const uploadBtn = document.getElementById(`uploadBtn${streamId}`);
-            const startBtn = document.querySelector(`[onclick="startStream(${streamId})"]`);
-            
-            if (fileInput) fileInput.value = '';
-            if (fileName) fileName.textContent = '';
-            if (uploadBtn) uploadBtn.style.display = 'none';
-            if (startBtn) startBtn.style.display = 'flex';
-        }
-    } catch (error) {
-        console.error('Error stopping stream:', error);
-        showNotification('error', 'Failed to stop stream');
-    }
-}
-
-// ==================== VIDEO UPLOAD ====================
-
-function handleFileSelect(streamId) {
-    const fileInput = document.getElementById(`file${streamId}`);
-    const fileName = document.getElementById(`fileName${streamId}`);
-    const uploadBtn = document.getElementById(`uploadBtn${streamId}`);
-    const startBtn = document.querySelector(`[onclick="startStream(${streamId})"]`);
-    
-    if (fileInput.files.length > 0) {
-        const file = fileInput.files[0];
-        fileName.textContent = `Selected: ${file.name} (${(file.size / (1024 * 1024)).toFixed(2)} MB)`;
-        
-        // Show upload button and hide start button
-        if (uploadBtn) uploadBtn.style.display = 'flex';
-        if (startBtn) startBtn.style.display = 'none';
-        
-        // Clear URL input
-        const urlInput = document.getElementById(`url${streamId}`);
-        if (urlInput) urlInput.value = '';
-    } else {
-        fileName.textContent = '';
-        if (uploadBtn) uploadBtn.style.display = 'none';
-        if (startBtn) startBtn.style.display = 'flex';
-    }
-}
-
-async function uploadVideo(streamId) {
-    const fileInput = document.getElementById(`file${streamId}`);
-    const uploadBtn = document.getElementById(`uploadBtn${streamId}`);
-    
-    if (!fileInput.files.length) {
-        showNotification('error', 'Please select a video file first');
-        return;
-    }
-    
-    const file = fileInput.files[0];
-    const formData = new FormData();
-    formData.append('file', file);
-    
-    try {
-        // Show uploading status
-        if (uploadBtn) {
-            uploadBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
-            uploadBtn.disabled = true;
-        }
-        
-        showNotification('info', `Uploading ${file.name}...`);
-        
-        const response = await fetch(`${API_BASE}/api/upload-video/${streamId}`, {
-            method: 'POST',
-            body: formData
-        });
-        
-        if (response.ok) {
-            const data = await response.json();
-            console.log(`Video uploaded and stream ${streamId} started:`, data);
-            showNotification('success', `Video uploaded successfully! Stream ${streamId + 1} started.`);
-            
-            // Reset upload button
-            if (uploadBtn) {
-                uploadBtn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Upload & Start';
-                uploadBtn.disabled = false;
-                uploadBtn.style.display = 'none';
-            }
-            
-            // Show start button again
-            const startBtn = document.querySelector(`[onclick="startStream(${streamId})"]`);
-            if (startBtn) startBtn.style.display = 'flex';
-            
-            // Clear file input
-            const fileName = document.getElementById(`fileName${streamId}`);
-            if (fileName) fileName.textContent = '';
-            if (fileInput) fileInput.value = '';
-            
-            // Reset stream state and start rendering
-            streamStates[streamId] = false;
-            streamRetryCount[streamId] = 0;
-            
-            // Give backend time to initialize processing, then start rendering
-            setTimeout(() => {
-                console.log(`Starting stream rendering after upload for stream ${streamId}`);
-                startStreamRendering(streamId);
-            }, 1500);
-            
-        } else {
-            const error = await response.json();
-            showNotification('error', `Upload failed: ${error.detail}`);
-            
-            // Reset upload button
-            if (uploadBtn) {
-                uploadBtn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Upload & Start';
-                uploadBtn.disabled = false;
-            }
-        }
-    } catch (error) {
-        console.error('Error uploading video:', error);
-        showNotification('error', 'Failed to upload video');
-        
-        // Reset upload button
-        if (uploadBtn) {
-            uploadBtn.innerHTML = '<i class="fas fa-cloud-upload-alt"></i> Upload & Start';
-            uploadBtn.disabled = false;
-        }
-    }
-}
-
-// ==================== VIOLATIONS PAGE ====================
-
-async function loadViolations() {
-    try {
-        const response = await fetch(`${API_BASE}/api/violations?limit=100`);
-        const data = await response.json();
-        
-        // Update summary
-        const violationSummary = data.violation_summary || {};
-        const speedCount = violationSummary.speed || 0;
-        const redLightCount = violationSummary.red_light || 0;
-        const stopLineCount = violationSummary.stop_line || 0;
-        const signalCount = redLightCount + stopLineCount;
-        
-        updateElement('violationTotal', data.total || 0);
-        updateElement('violationSpeed', speedCount);
-        updateElement('violationSignal', signalCount);
-        
-        // Calculate today's violations
-        const today = new Date().toDateString();
-        const todayViolations = (data.violations || []).filter(v => {
-            const vDate = new Date(v.timestamp).toDateString();
-            return vDate === today;
-        });
-        updateElement('violationToday', todayViolations.length);
-        
-        // Update table
-        updateViolationsTable(data.violations || []);
-    } catch (error) {
-        console.error('Error loading violations:', error);
-    }
-}
-
-function updateViolationsTable(violations) {
-    const tbody = document.getElementById('violationsTableBody');
-    
-    if (!violations || violations.length === 0) {
-        tbody.innerHTML = `
-            <tr>
-                <td colspan="8" class="empty-state">
-                    <i class="fas fa-check-circle"></i>
-                    <p>No violations detected</p>
-                </td>
-            </tr>
-        `;
-        return;
-    }
-    
-    tbody.innerHTML = violations.map(v => {
-        // Map violation types to display labels
-        const violationLabels = {
-            'speed': 'Speed Limit',
-            'red_light': 'Red Light',
-            'stop_line': 'Stop Line',
-            'lane_change': 'Lane Change',
-            'wrong_lane': 'Wrong Lane',
-            'unsafe_distance': 'Unsafe Distance'
-        };
-        
-        const vType = v.violation_type || 'speed';
-        const typeLabel = violationLabels[vType] || 'Violation';
-        const cssClass = vType === 'speed' ? 'speed' : 'signal';
-        
-        let details = '';
-        if (vType === 'speed' && v.speed_limit && v.speed_kmh) {
-            details = `Over limit by ${(v.speed_kmh - v.speed_limit).toFixed(1)} km/h`;
-        } else if (vType === 'red_light' || vType === 'stop_line') {
-            details = `Crossed during ${v.signal_state || 'RED'} light`;
-        } else if (vType === 'lane_change') {
-            details = `Improper lane change to Lane ${v.lane || 'N/A'}`;
-        } else if (vType === 'wrong_lane') {
-            details = `Wrong lane driving detected`;
-        } else if (vType === 'unsafe_distance') {
-            details = `Following too closely`;
-        } else {
-            details = `Violation detected`;
-        }
-        
-        return `
-            <tr>
-                <td>#${v.id}</td>
-                <td>Stream ${(v.stream_id || 0) + 1}</td>
-                <td><span class="violation-badge ${cssClass}">${typeLabel}</span></td>
-                <td>${v.vehicle_class || 'Unknown'}</td>
-                <td>${v.speed_kmh ? v.speed_kmh.toFixed(1) : 'N/A'} km/h</td>
-                <td>${details}</td>
-                <td>${formatTimestamp(v.timestamp)}</td>
-                <td>
-                    <button class="view-btn" onclick="viewViolation(${v.id})">
-                        <i class="fas fa-eye"></i>
-                    </button>
-                </td>
-            </tr>
-        `;
-    }).join('');
-}
-
-function applyFilters() {
-    const typeFilter = document.getElementById('violationTypeFilter').value;
-    const streamFilter = document.getElementById('violationStreamFilter').value;
-    const vehicleFilter = document.getElementById('violationVehicleFilter').value;
-    
-    let filtered = [...allViolations];
-    
-    if (typeFilter !== 'all') {
-        filtered = filtered.filter(v => v.violation_type === typeFilter);
-    }
-    
-    if (streamFilter !== 'all') {
-        filtered = filtered.filter(v => v.stream_id === parseInt(streamFilter));
-    }
-    
-    if (vehicleFilter !== 'all') {
-        filtered = filtered.filter(v => v.vehicle_class && v.vehicle_class.toLowerCase() === vehicleFilter.toLowerCase());
-    }
-    
-    updateViolationsTable(filtered);
-}
-
-function viewViolation(id) {
-    const violation = allViolations.find(v => v.id === id);
-    if (violation) {
-        alert(`Violation Details:\n\nID: ${violation.id}\nType: ${violation.violation_type}\nVehicle: ${violation.vehicle_class}\nSpeed: ${violation.speed_kmh} km/h\nTimestamp: ${violation.timestamp}`);
-    }
-}
-
-// ==================== UTILITY FUNCTIONS ====================
-
-function updateElement(id, value) {
-    const element = document.getElementById(id);
-    if (element) {
-        if (typeof value === 'number') {
-            animateValue(element, parseInt(element.textContent) || 0, value, 500);
-        } else {
-            element.textContent = value;
-        }
-    }
-}
-
-function animateValue(element, start, end, duration) {
-    const range = end - start;
-    const increment = range / (duration / 16);
-    let current = start;
-    
-    const timer = setInterval(() => {
-        current += increment;
-        if ((increment > 0 && current >= end) || (increment < 0 && current <= end)) {
-            current = end;
-            clearInterval(timer);
-        }
-        element.textContent = Math.round(current);
-    }, 16);
-}
-
-function formatTime(timestamp) {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diff = now - date;
-    
-    if (diff < 60000) {
-        return 'Just now';
-    } else if (diff < 3600000) {
-        return `${Math.floor(diff / 60000)} min ago`;
-    } else if (diff < 86400000) {
-        return `${Math.floor(diff / 3600000)} hour ago`;
-    } else {
-        return date.toLocaleDateString();
-    }
-}
-
-function formatTimestamp(timestamp) {
-    const date = new Date(timestamp);
-    return date.toLocaleString();
-}
-
-function showNotification(type, message) {
-    // Create notification element
-    const notification = document.createElement('div');
-    notification.className = `notification ${type}`;
-    
-    // Different styling based on type
-    let backgroundColor, icon;
-    if (type === 'success') {
-        backgroundColor = 'var(--primary-green)';
-        icon = '<i class="fas fa-check-circle"></i>';
-    } else if (type === 'error') {
-        backgroundColor = 'var(--primary-red)';
-        icon = '<i class="fas fa-exclamation-circle"></i>';
-    } else if (type === 'info') {
-        backgroundColor = 'var(--primary-purple)';
-        icon = '<i class="fas fa-info-circle"></i>';
-    } else {
-        backgroundColor = '#FFA500';
-        icon = '<i class="fas fa-bell"></i>';
-    }
-    
-    notification.style.cssText = `
-        position: fixed;
-        top: 100px;
-        right: 20px;
-        min-width: 300px;
-        max-width: 500px;
-        padding: 1rem 1.5rem;
-        background: ${backgroundColor};
-        color: white;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-        z-index: 10000;
-        animation: slideIn 0.3s ease-out;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        font-size: 14px;
-    `;
-    
-    notification.innerHTML = `
-        ${icon}
-        <span style="flex: 1;">${message}</span>
-        <button onclick="this.parentElement.remove()" style="background: none; border: none; color: white; cursor: pointer; font-size: 18px;">
-            <i class="fas fa-times"></i>
-        </button>
-    `;
-    
-    document.body.appendChild(notification);
-    
-    // Play sound for error (violation) notifications
-    if (type === 'error') {
-        playNotificationSound();
-    }
-    
-    // Remove after 5 seconds (longer for violations)
-    const duration = type === 'error' ? 5000 : 3000;
-    setTimeout(() => {
-        notification.style.animation = 'slideOut 0.3s ease-out';
-        setTimeout(() => notification.remove(), 300);
-    }, duration);
-}
-
-function playNotificationSound() {
-    // Create audio context for notification beep
-    try {
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioContext.createOscillator();
-        const gainNode = audioContext.createGain();
-        
-        oscillator.connect(gainNode);
-        gainNode.connect(audioContext.destination);
-        
-        oscillator.frequency.value = 800;
-        oscillator.type = 'sine';
-        
-        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
-        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + 0.5);
-        
-        oscillator.start(audioContext.currentTime);
-        oscillator.stop(audioContext.currentTime + 0.5);
-    } catch (error) {
-        console.log('Audio notification not available');
-    }
-}
-
-// Add animation styles
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes slideIn {
-        from {
-            transform: translateX(400px);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-    
-    @keyframes slideOut {
-        from {
-            transform: translateX(0);
-            opacity: 1;
-        }
-        to {
-            transform: translateX(400px);
-            opacity: 0;
-        }
-    }
-`;
-document.head.appendChild(style);
-
-// ==================== HEALTH CHECK ====================
-
-async function checkHealth() {
-    try {
-        const response = await fetch(`${API_BASE}/api/health`);
-        const data = await response.json();
-        console.log('System health:', data);
-    } catch (error) {
-        console.error('Health check failed:', error);
-    }
-}
-
-// Check health every 30 seconds
-setInterval(checkHealth, 30000);
-
-console.log('PTU Traffic Monitoring System initialized successfully!');

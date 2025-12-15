@@ -1,22 +1,62 @@
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.log
-venv/
-env/
-build/
-dist/
+# Git
 .git
 .gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+.venv
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data directories (will be created at runtime)
 data/violations/*
 data/logs/*
-data/output/*
-data/output_videos/*
 data/uploads/*
-*.mp4
-*.avi
-*.mkv
-*.mov
-*.flv
-*.wmv
+data/output/*
+
+# Keep the directories but not their contents
+!data/violations/.gitkeep
+!data/logs/.gitkeep
+!data/uploads/.gitkeep
+!data/output/.gitkeep
+
+# Frontend (deployed separately)
+frontend/
+
+# Documentation
+*.md
+README*
+
+# Test files
+test_*
+*_test.py
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log

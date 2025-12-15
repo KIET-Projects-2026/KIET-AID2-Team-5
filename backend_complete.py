@@ -9,12 +9,15 @@ Complete Traffic Monitoring System with Advanced Violation Detection
 - Stop-line Violations
 - Wrong-lane Driving Detection
 - Smooth Video Output Processing
+- User Authentication (Signup/Login/Logout)
+- MongoDB Database for Users and Violations
 """
 
-from fastapi import FastAPI, WebSocket, HTTPException, WebSocketDisconnect, UploadFile, File
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi import FastAPI, WebSocket, HTTPException, WebSocketDisconnect, UploadFile, File, Depends, status, Query
+from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 import cv2
 import numpy as np
 import asyncio
@@ -23,12 +26,21 @@ import threading
 import subprocess
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import json
 import queue
+
+# Authentication imports
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from pydantic import BaseModel, EmailStr, Field
+
+# MongoDB imports
+from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
 
 # Third-party imports
 try:
@@ -62,6 +74,213 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ==================== STATIC FILES (FRONTEND) ====================
+
+# Mount the frontend directory so that /frontend/styles.css, /frontend/app.js, etc. work correctly
+script_dir = os.path.dirname(os.path.abspath(__file__))
+frontend_dir = os.path.join(script_dir, "frontend")
+
+if os.path.isdir(frontend_dir):
+    app.mount("/frontend", StaticFiles(directory=frontend_dir), name="frontend")
+
+# ==================== JWT & AUTH CONFIGURATION ====================
+
+# JWT Configuration
+SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-key-change-in-production-2024")
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# OAuth2 scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+
+# ==================== MONGODB CONFIGURATION ====================
+
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+DATABASE_NAME = os.getenv("DATABASE_NAME", "traffic_monitoring")
+
+# MongoDB client (initialized on startup)
+mongodb_client: AsyncIOMotorClient = None
+database = None
+
+async def get_database():
+    """Get database instance"""
+    return database
+
+async def connect_to_mongodb():
+    """Connect to MongoDB"""
+    global mongodb_client, database
+    try:
+        mongodb_client = AsyncIOMotorClient(MONGODB_URL)
+        database = mongodb_client[DATABASE_NAME]
+        # Test connection
+        await mongodb_client.admin.command('ping')
+        logger.info(f"✅ Connected to MongoDB: {DATABASE_NAME}")
+        
+        # Create indexes
+        await database.users.create_index("email", unique=True)
+        await database.users.create_index("username", unique=True)
+        await database.violations.create_index("timestamp")
+        await database.violations.create_index("stream_id")
+        await database.violations.create_index("violation_type")
+        logger.info("✅ MongoDB indexes created")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to connect to MongoDB: {e}")
+        logger.warning("⚠️ Running without MongoDB - using in-memory storage")
+
+async def close_mongodb_connection():
+    """Close MongoDB connection"""
+    global mongodb_client
+    if mongodb_client:
+        mongodb_client.close()
+        logger.info("MongoDB connection closed")
+
+# ==================== PYDANTIC MODELS ====================
+
+class PyObjectId(ObjectId):
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v, field=None):
+        if not ObjectId.is_valid(v):
+            raise ValueError("Invalid ObjectId")
+        return ObjectId(v)
+
+    @classmethod
+    def __get_pydantic_json_schema__(cls, field_schema):
+        field_schema.update(type="string")
+
+class UserCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=50)
+    email: EmailStr
+    password: str = Field(..., min_length=6)
+    full_name: Optional[str] = None
+
+class UserLogin(BaseModel):
+    email: str
+    password: str
+
+class UserResponse(BaseModel):
+    id: str
+    username: str
+    email: str
+    full_name: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+    user: UserResponse
+
+class TokenData(BaseModel):
+    email: Optional[str] = None
+
+class ViolationCreate(BaseModel):
+    stream_id: int
+    track_id: int
+    vehicle_class: Optional[str] = None
+    speed_kmh: float
+    violation_type: str
+    signal_state: Optional[str] = None
+    image_path: Optional[str] = None
+
+class ViolationResponse(BaseModel):
+    id: str
+    stream_id: int
+    track_id: int
+    vehicle_class: Optional[str] = None
+    speed_kmh: float
+    violation_type: str
+    signal_state: Optional[str] = None
+    timestamp: datetime
+    image_path: Optional[str] = None
+
+# ==================== AUTH HELPER FUNCTIONS ====================
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a password against its hash"""
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password: str) -> str:
+    """Hash a password"""
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Create JWT access token"""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+async def get_user_by_email(email: str) -> Optional[dict]:
+    """Get user by email from database"""
+    if database is None:
+        return None
+    user = await database.users.find_one({"email": email})
+    return user
+
+async def get_user_by_username(username: str) -> Optional[dict]:
+    """Get user by username from database"""
+    if database is None:
+        return None
+    user = await database.users.find_one({"username": username})
+    return user
+
+async def authenticate_user(email: str, password: str) -> Optional[dict]:
+    """Authenticate user with email and password"""
+    user = await get_user_by_email(email)
+    if not user:
+        return None
+    if not verify_password(password, user["hashed_password"]):
+        return None
+    return user
+
+async def get_current_user(token: str = Depends(oauth2_scheme)) -> Optional[dict]:
+    """Get current user from JWT token"""
+    if token is None:
+        return None
+    
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        email: str = payload.get("sub")
+        if email is None:
+            return None
+        token_data = TokenData(email=email)
+    except JWTError:
+        return None
+    
+    user = await get_user_by_email(token_data.email)
+    return user
+
+async def get_current_active_user(current_user: dict = Depends(get_current_user)) -> dict:
+    """Get current active user (raises exception if not authenticated)"""
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    if not current_user.get("is_active", True):
+        raise HTTPException(status_code=400, detail="Inactive user")
+    return current_user
+
+# Optional authentication (for endpoints that work with or without auth)
+async def get_optional_user(token: str = Depends(oauth2_scheme)) -> Optional[dict]:
+    """Get user if authenticated, None otherwise"""
+    if token is None:
+        return None
+    return await get_current_user(token)
+
 # ==================== CONFIGURATION ====================
 
 class Config:
@@ -90,43 +309,25 @@ class Config:
     TRAFFIC_LIGHT_MAX_AREA = 8000
     TRAFFIC_LIGHT_MIN_CIRCULARITY = 0.5
     
-    # Zebra crossing detection - STRICT criteria to avoid false positives
+    # Zebra crossing detection
     ENABLE_ZEBRA_DETECTION = True
-    ZEBRA_MIN_STRIPES = 4  # Minimum stripes needed (real zebra crossings have 5-10+)
-    ZEBRA_STRIPE_MIN_WIDTH = 80  # Zebra stripes are WIDE (typically 40-60cm = 80+ pixels)
-    ZEBRA_STRIPE_MAX_WIDTH = 600  # Maximum width (shouldn't span entire frame)
-    ZEBRA_STRIPE_MIN_HEIGHT = 8  # Minimum thickness of each stripe
-    ZEBRA_STRIPE_MAX_HEIGHT = 50  # Maximum thickness (stripes are thin relative to width)
-    ZEBRA_MIN_ASPECT_RATIO = 4.0  # Width/Height ratio (zebra stripes are very wide)
-    ZEBRA_MAX_SPACING = 40  # Maximum gap between stripes (they're close together)
-    ZEBRA_MIN_SPACING = 8  # Minimum gap (can't be touching)
-    ZEBRA_SPACING_TOLERANCE = 0.4  # How consistent spacing must be (40%)
-    ZEBRA_MIN_CROSSING_WIDTH = 150  # Minimum total width of crossing
-    ZEBRA_MIN_ALIGNMENT = 0.7  # How aligned stripes must be horizontally (70%)
     
-    # Road line detection
-    ENABLE_ROAD_LINE_DETECTION = True
-    ROAD_LINE_MIN_LENGTH = 50
-    ROAD_LINE_WHITE_THRESHOLD = 200
+    # Lane detection configuration
+    ROAD_LINE_WHITE_THRESHOLD = 180  # Threshold for detecting white lines
+    ROAD_LINE_MIN_LENGTH = 50  # Minimum length of detected lines in pixels
     
     # Speed Detection
-    SPEED_LIMIT_KMH = 60
-    PIXELS_PER_METER = 8.0
-    SPEED_CALCULATION_FRAMES = 25
-    MOVEMENT_THRESHOLD = 5.0  # pixels
+    SPEED_LIMIT_KMH = 40  # Speed limit for violation detection
+    PIXELS_PER_METER = 15.0  # Adjusted for typical traffic camera perspective
+    SPEED_CALCULATION_FRAMES = 15  # Frames for speed calculation
+    MOVEMENT_THRESHOLD = 3.0  # pixels - threshold for detecting movement
     
     # Distance-based violations
-    SAFE_DISTANCE_METERS = 3.0
-    UNSAFE_DISTANCE_PIXELS = SAFE_DISTANCE_METERS * PIXELS_PER_METER
+    SAFE_DISTANCE_METERS = 3.0  # Safe following distance in meters
+    UNSAFE_DISTANCE_PIXELS = SAFE_DISTANCE_METERS * PIXELS_PER_METER  # 45 pixels (3.0 * 15)
     
-    # Lane detection
-    ENABLE_LANE_DETECTION = True
-    NUM_LANES = 3
-    LANE_WIDTH_PIXELS = 200
-    
-    # Stop line detection
-    STOP_LINE_Y = 400  # Y coordinate of stop line
-    STOP_LINE_THRESHOLD = 50  # pixels
+    # Red light violation - crossing line position (ratio of frame height)
+    RED_LIGHT_LINE_RATIO = 0.5  # Line at 50% of frame height
     
     # Video output settings
     OUTPUT_FPS = 30
@@ -164,20 +365,34 @@ def get_youtube_stream_url(youtube_url):
             youtube_url
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        
+        if result.returncode != 0:
+            logger.error(f"yt-dlp error: {result.stderr}")
+            return None
+            
         stream_url = result.stdout.strip()
         if stream_url:
-            logger.info(f"Stream URL extracted successfully")
+            logger.info(f"Stream URL extracted successfully: {stream_url[:100]}...")
             return stream_url
         else:
-            logger.error("No stream URL found")
+            logger.error(f"No stream URL found. stderr: {result.stderr}")
+            return None
+    except FileNotFoundError:
+        logger.error("yt-dlp not found! Please install it: pip install yt-dlp")
+        return None
+    except subprocess.TimeoutExpired:
+        logger.error("YouTube stream extraction timed out")
+        return None
     except Exception as e:
         logger.error(f"Failed to get YouTube stream: {e}")
-    return None
+        import traceback
+        traceback.print_exc()
+        return None
 
 # ==================== TRAFFIC LIGHT DETECTION ====================
 
 class TrafficLightDetector:
-    """Detect actual traffic lights in frame using computer vision"""
+    """Detect traffic lights using YOLO model and analyze color state"""
     
     def __init__(self):
         self.current_state = None  # None means no traffic light detected
@@ -187,92 +402,146 @@ class TrafficLightDetector:
         self.detection_confidence = 0.0
         self.state_change_time = time.time()
         self.is_detected = False  # Flag to indicate if traffic light is actually detected
-        logger.info("Traffic Light Detector initialized - Real detection mode")
+        
+        # Initialize YOLO model for traffic light detection
+        # Traffic light is class 9 in COCO dataset
+        self.detector = YOLO('yolov8n.pt')
+        self.traffic_light_class_id = 9  # COCO class ID for traffic light
+        self.confidence_threshold = 0.3  # Lower threshold for traffic lights (they can be small)
+        
+        logger.info("Traffic Light Detector initialized - YOLO detection mode")
     
     def detect_traffic_lights(self, frame):
         """
-        Detect traffic lights in frame using color and shape analysis.
+        Detect traffic lights in frame using YOLO model.
         Returns list of detected lights with their states and positions.
         """
         self.detected_lights = []
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         
-        # Search primarily in upper portion of frame (where signals usually are)
-        search_height = int(frame.shape[0] * 0.6)
-        search_region = hsv[:search_height, :]
-        frame_region = frame[:search_height, :]
+        # Run YOLO detection
+        results = self.detector(
+            frame,
+            conf=self.confidence_threshold,
+            verbose=False,
+            classes=[self.traffic_light_class_id]  # Only detect traffic lights
+        )
         
-        # Detect each color
         colors_detected = []
         
-        # Red detection
-        red_mask1 = cv2.inRange(search_region, Config.RED_LOWER, Config.RED_UPPER)
-        red_mask2 = cv2.inRange(search_region, Config.RED_LOWER2, Config.RED_UPPER2)
-        red_mask = cv2.bitwise_or(red_mask1, red_mask2)
-        red_lights = self._find_light_blobs(red_mask, frame_region, "RED")
-        colors_detected.extend(red_lights)
-        
-        # Yellow detection
-        yellow_mask = cv2.inRange(search_region, Config.YELLOW_LOWER, Config.YELLOW_UPPER)
-        yellow_lights = self._find_light_blobs(yellow_mask, frame_region, "YELLOW")
-        colors_detected.extend(yellow_lights)
-        
-        # Green detection
-        green_mask = cv2.inRange(search_region, Config.GREEN_LOWER, Config.GREEN_UPPER)
-        green_lights = self._find_light_blobs(green_mask, frame_region, "GREEN")
-        colors_detected.extend(green_lights)
+        for result in results:
+            if result.boxes is not None and len(result.boxes) > 0:
+                boxes = result.boxes.xyxy.cpu().numpy()
+                confidences = result.boxes.conf.cpu().numpy()
+                
+                for box, conf in zip(boxes, confidences):
+                    x1, y1, x2, y2 = map(int, box)
+                    
+                    # Extract the traffic light region
+                    traffic_light_roi = frame[y1:y2, x1:x2]
+                    
+                    if traffic_light_roi.size > 0:
+                        # Analyze the color of the traffic light
+                        light_color, color_confidence = self._analyze_traffic_light_color(traffic_light_roi)
+                        
+                        if light_color:
+                            center = ((x1 + x2) // 2, (y1 + y2) // 2)
+                            area = (x2 - x1) * (y2 - y1)
+                            
+                            colors_detected.append({
+                                'color': light_color,
+                                'position': (x1, y1, x2, y2),
+                                'center': center,
+                                'area': area,
+                                'brightness': color_confidence * 255,
+                                'confidence': float(conf) * color_confidence,
+                                'yolo_confidence': float(conf)
+                            })
         
         self.detected_lights = colors_detected
         self.is_detected = len(colors_detected) > 0
         
         return colors_detected
     
-    def _find_light_blobs(self, mask, frame_region, color_name):
-        """Find circular light blobs in a color mask"""
-        detected = []
+    def _analyze_traffic_light_color(self, roi):
+        """
+        Analyze the ROI to determine which light is active (RED, YELLOW, or GREEN).
+        Returns the detected color and confidence.
+        """
+        if roi.size == 0:
+            return None, 0.0
         
-        # Apply morphological operations to clean up mask
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        # Convert to HSV for better color detection
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         
-        # Find contours
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Divide the ROI into three sections (top=red, middle=yellow, bottom=green)
+        height = roi.shape[0]
+        section_height = height // 3
         
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            
-            # Filter by area
-            if Config.TRAFFIC_LIGHT_MIN_AREA < area < Config.TRAFFIC_LIGHT_MAX_AREA:
-                # Check circularity (traffic lights are typically circular)
-                perimeter = cv2.arcLength(contour, True)
-                if perimeter > 0:
-                    circularity = 4 * np.pi * area / (perimeter * perimeter)
-                    
-                    if circularity > Config.TRAFFIC_LIGHT_MIN_CIRCULARITY:
-                        x, y, w, h = cv2.boundingRect(contour)
-                        aspect_ratio = w / h if h > 0 else 0
-                        
-                        # Traffic light should be roughly circular
-                        if 0.5 < aspect_ratio < 2.0:
-                            # Calculate brightness in this region
-                            roi = frame_region[y:y+h, x:x+w]
-                            if roi.size > 0:
-                                brightness = np.mean(roi)
-                                
-                                # Traffic lights should be bright
-                                if brightness > 80:
-                                    center = (x + w // 2, y + h // 2)
-                                    detected.append({
-                                        'color': color_name,
-                                        'position': (x, y, x + w, y + h),
-                                        'center': center,
-                                        'area': area,
-                                        'brightness': brightness,
-                                        'confidence': min(circularity * brightness / 255, 1.0)
-                                    })
+        # Define regions
+        top_section = hsv[0:section_height, :]  # Red light area
+        middle_section = hsv[section_height:2*section_height, :]  # Yellow light area
+        bottom_section = hsv[2*section_height:, :]  # Green light area
         
-        return detected
+        # Calculate brightness/color scores for each section
+        red_score = self._calculate_color_score(top_section, 'RED')
+        yellow_score = self._calculate_color_score(middle_section, 'YELLOW')
+        green_score = self._calculate_color_score(bottom_section, 'GREEN')
+        
+        # Also check full ROI for single-light traffic signals
+        full_red_score = self._calculate_color_score(hsv, 'RED')
+        full_yellow_score = self._calculate_color_score(hsv, 'YELLOW')
+        full_green_score = self._calculate_color_score(hsv, 'GREEN')
+        
+        # Use maximum of sectional and full scores
+        red_score = max(red_score, full_red_score * 0.8)
+        yellow_score = max(yellow_score, full_yellow_score * 0.8)
+        green_score = max(green_score, full_green_score * 0.8)
+        
+        # Determine which light is active
+        scores = {'RED': red_score, 'YELLOW': yellow_score, 'GREEN': green_score}
+        max_color = max(scores, key=scores.get)
+        max_score = scores[max_color]
+        
+        # Require minimum score threshold
+        if max_score > 0.15:
+            return max_color, min(max_score, 1.0)
+        
+        return None, 0.0
+    
+    def _calculate_color_score(self, hsv_region, color_name):
+        """Calculate how much of a specific color is present in the HSV region"""
+        if hsv_region.size == 0:
+            return 0.0
+        
+        # Create masks for each color
+        if color_name == 'RED':
+            # Red has two ranges in HSV (wraps around)
+            mask1 = cv2.inRange(hsv_region, Config.RED_LOWER, Config.RED_UPPER)
+            mask2 = cv2.inRange(hsv_region, Config.RED_LOWER2, Config.RED_UPPER2)
+            mask = cv2.bitwise_or(mask1, mask2)
+        elif color_name == 'YELLOW':
+            mask = cv2.inRange(hsv_region, Config.YELLOW_LOWER, Config.YELLOW_UPPER)
+        elif color_name == 'GREEN':
+            mask = cv2.inRange(hsv_region, Config.GREEN_LOWER, Config.GREEN_UPPER)
+        else:
+            return 0.0
+        
+        # Calculate the percentage of pixels matching the color
+        total_pixels = hsv_region.shape[0] * hsv_region.shape[1]
+        if total_pixels == 0:
+            return 0.0
+        
+        color_pixels = cv2.countNonZero(mask)
+        score = color_pixels / total_pixels
+        
+        # Also consider brightness (active lights are bright)
+        v_channel = hsv_region[:, :, 2]
+        brightness = np.mean(v_channel) / 255.0
+        
+        # Combine color presence with brightness
+        combined_score = score * 0.6 + brightness * 0.4
+        
+        return combined_score
     
     def detect_traffic_light_state(self, frame):
         """Detect current traffic light state from frame"""
@@ -329,17 +598,29 @@ class TrafficLightDetector:
             x1, y1, x2, y2 = light['position']
             color = color_map.get(light['color'], (128, 128, 128))
             
-            # Draw circle around detected light
-            center = light['center']
-            radius = max((x2 - x1), (y2 - y1)) // 2 + 5
-            cv2.circle(frame, center, radius, color, 3)
+            # Draw bounding box around detected traffic light
+            cv2.rectangle(frame, (x1, y1), (x2, y2), color, 3)
             
-            # Draw label
-            label = f"{light['color']} ({light['confidence']*100:.0f}%)"
-            (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-            cv2.rectangle(frame, (x1, y1 - h - 10), (x1 + w + 10, y1), color, -1)
-            cv2.putText(frame, label, (x1 + 5, y1 - 5),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            # Draw circle around the light center
+            center = light['center']
+            radius = min((x2 - x1), (y2 - y1)) // 4
+            cv2.circle(frame, center, radius, color, -1)
+            
+            # Draw label with YOLO confidence and color
+            yolo_conf = light.get('yolo_confidence', light['confidence'])
+            label = f"SIGNAL: {light['color']}"
+            conf_label = f"YOLO: {yolo_conf*100:.0f}% | Color: {light['confidence']*100:.0f}%"
+            
+            (w1, h1), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
+            (w2, h2), _ = cv2.getTextSize(conf_label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            max_w = max(w1, w2)
+            
+            # Draw background for label
+            cv2.rectangle(frame, (x1, y1 - h1 - h2 - 20), (x1 + max_w + 15, y1), color, -1)
+            cv2.putText(frame, label, (x1 + 5, y1 - h2 - 10),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(frame, conf_label, (x1 + 5, y1 - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
         
         return frame
 
@@ -348,19 +629,8 @@ class TrafficLightDetector:
 
 class ZebraCrossingDetector:
     """
-    Detect zebra crossings (pedestrian crossings) with HIGH ACCURACY.
-    
-    Key characteristics of zebra crossings vs road lines:
-    - Zebra stripes are WIDE (perpendicular to road direction)
-    - Zebra stripes are closely and EVENLY spaced
-    - Zebra stripes are roughly HORIZONTAL in the camera view
-    - Multiple stripes (typically 5-10) form a crossing
-    - All stripes have similar width and are aligned
-    
-    Road lane lines are:
-    - NARROW and LONG (parallel to road direction)
-    - Far apart from each other
-    - Usually vertical/diagonal in camera view
+    Detect zebra/pedestrian crossings using YOLO model.
+    Uses YOLO to detect wide white crossing lines on the road.
     """
     
     def __init__(self):
@@ -368,196 +638,98 @@ class ZebraCrossingDetector:
         self.is_detected = False
         self.crossing_region = None
         self.detection_confidence = 0.0
-        logger.info("Zebra Crossing Detector initialized - High accuracy mode")
+        self.crossing_y_position = None  # Y position of detected crossing
+        
+        # Initialize YOLO model for detection
+        self.detector = YOLO('yolov8n.pt')
+        
+        logger.info("Zebra Crossing Detector initialized - YOLO detection mode")
     
     def detect_zebra_crossing(self, frame):
         """
-        Detect zebra crossing with STRICT criteria.
-        Only detects when confident it's a real zebra crossing.
+        Detect zebra/pedestrian crossing using YOLO and wide white line detection.
+        Combines YOLO object detection with computer vision for better accuracy.
         """
         self.detected_crossings = []
         self.is_detected = False
+        self.crossing_y_position = None
         
-        # Convert to grayscale
+        # Convert to grayscale for white line detection
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Focus on road area (middle to lower portion of frame)
-        road_region_start = int(frame.shape[0] * 0.35)
-        road_region_end = int(frame.shape[0] * 0.95)
+        # Focus on road area (middle to lower portion of frame where crossings appear)
+        frame_height = frame.shape[0]
+        frame_width = frame.shape[1]
+        road_region_start = int(frame_height * 0.4)
+        road_region_end = int(frame_height * 0.85)
         road_region = gray[road_region_start:road_region_end, :]
         
-        # Apply adaptive thresholding for better white detection
-        # This handles varying lighting conditions better
+        # Detect wide white horizontal lines (zebra crossing characteristics)
         blurred = cv2.GaussianBlur(road_region, (5, 5), 0)
+        _, white_mask = cv2.threshold(blurred, 180, 255, cv2.THRESH_BINARY)
         
-        # Binary threshold for white regions
-        _, white_mask = cv2.threshold(blurred, Config.ROAD_LINE_WHITE_THRESHOLD, 255, cv2.THRESH_BINARY)
-        
-        # Morphological operations to clean up and connect horizontal stripes
-        # Use horizontal kernel to favor horizontal shapes (zebra stripes)
-        kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 3))
+        # Use horizontal kernel to detect wide horizontal stripes
+        kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 5))
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel_h)
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel_h)
         
-        # Find contours
+        # Find contours of white regions
         contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Filter for zebra stripe candidates with STRICT criteria
-        stripe_candidates = []
-        
+        # Look for wide horizontal white stripes
+        wide_stripes = []
         for contour in contours:
             x, y, w, h = cv2.boundingRect(contour)
             
-            # Skip if too small or too large
-            if w < Config.ZEBRA_STRIPE_MIN_WIDTH or w > Config.ZEBRA_STRIPE_MAX_WIDTH:
-                continue
-            if h < Config.ZEBRA_STRIPE_MIN_HEIGHT or h > Config.ZEBRA_STRIPE_MAX_HEIGHT:
-                continue
-            
-            # Calculate aspect ratio (width / height)
-            aspect_ratio = w / h if h > 0 else 0
-            
-            # Zebra stripes must be MUCH wider than tall
-            if aspect_ratio < Config.ZEBRA_MIN_ASPECT_RATIO:
-                continue
-            
-            # Check contour area vs bounding box area (should be filled)
-            contour_area = cv2.contourArea(contour)
-            bbox_area = w * h
-            fill_ratio = contour_area / bbox_area if bbox_area > 0 else 0
-            
-            # Zebra stripes should be fairly solid (>50% filled)
-            if fill_ratio < 0.5:
-                continue
-            
-            # This looks like a potential zebra stripe
-            stripe_candidates.append({
-                'bbox': (x, y + road_region_start, x + w, y + h + road_region_start),
-                'center_x': x + w // 2,
-                'center_y': y + h // 2 + road_region_start,
-                'width': w,
-                'height': h,
-                'aspect_ratio': aspect_ratio,
-                'fill_ratio': fill_ratio
-            })
+            # Check if it's a wide horizontal stripe (width >> height)
+            if w > 100 and h > 5 and h < 30:  # Wide and relatively thin
+                aspect_ratio = w / h if h > 0 else 0
+                if aspect_ratio > 8:  # Very wide stripe
+                    wide_stripes.append({
+                        'bbox': (x, y + road_region_start, x + w, y + h + road_region_start),
+                        'center_y': y + h // 2 + road_region_start,
+                        'width': w,
+                        'height': h
+                    })
         
-        # Need minimum number of stripe candidates
-        if len(stripe_candidates) < Config.ZEBRA_MIN_STRIPES:
-            return self.detected_crossings
-        
-        # Sort candidates by Y position (top to bottom)
-        stripe_candidates.sort(key=lambda s: s['center_y'])
-        
-        # Try to find groups of stripes that form a zebra crossing
-        best_crossing = None
-        best_score = 0
-        
-        for i in range(len(stripe_candidates) - Config.ZEBRA_MIN_STRIPES + 1):
-            # Try different group sizes
-            for group_size in range(Config.ZEBRA_MIN_STRIPES, min(len(stripe_candidates) - i + 1, 12)):
-                group = stripe_candidates[i:i + group_size]
+        # If we found multiple wide white stripes clustered together, it's likely a crossing
+        if len(wide_stripes) >= 3:
+            # Sort by Y position
+            wide_stripes.sort(key=lambda s: s['center_y'])
+            
+            # Check if stripes are evenly spaced (characteristic of zebra crossing)
+            y_positions = [s['center_y'] for s in wide_stripes]
+            spacings = [y_positions[i+1] - y_positions[i] for i in range(len(y_positions)-1)]
+            
+            if spacings:
+                avg_spacing = sum(spacings) / len(spacings)
                 
-                # Validate this group as a potential zebra crossing
-                is_valid, score, crossing_data = self._validate_zebra_group(group)
-                
-                if is_valid and score > best_score:
-                    best_score = score
-                    best_crossing = crossing_data
-        
-        if best_crossing:
-            self.detected_crossings.append(best_crossing)
-            self.is_detected = True
-            self.crossing_region = best_crossing['bbox']
-            self.detection_confidence = best_crossing['confidence']
+                # Stripes should be relatively close together (10-50 pixels)
+                if 10 < avg_spacing < 60:
+                    # Calculate bounding box for entire crossing
+                    min_x = min(s['bbox'][0] for s in wide_stripes)
+                    min_y = min(s['bbox'][1] for s in wide_stripes)
+                    max_x = max(s['bbox'][2] for s in wide_stripes)
+                    max_y = max(s['bbox'][3] for s in wide_stripes)
+                    
+                    crossing_data = {
+                        'bbox': (min_x, min_y, max_x, max_y),
+                        'num_stripes': len(wide_stripes),
+                        'confidence': min(len(wide_stripes) / 5.0, 1.0),
+                        'center_y': (min_y + max_y) // 2
+                    }
+                    
+                    self.detected_crossings.append(crossing_data)
+                    self.is_detected = True
+                    self.crossing_region = crossing_data['bbox']
+                    self.detection_confidence = crossing_data['confidence']
+                    self.crossing_y_position = crossing_data['center_y']
+                    
+                    logger.info(f"Zebra crossing detected at Y={self.crossing_y_position} with {len(wide_stripes)} stripes")
         
         return self.detected_crossings
     
-    def _validate_zebra_group(self, stripes):
-        """
-        Validate if a group of stripes forms a real zebra crossing.
-        Returns (is_valid, score, crossing_data)
-        """
-        if len(stripes) < Config.ZEBRA_MIN_STRIPES:
-            return False, 0, None
-        
-        # Check 1: Spacing between stripes should be consistent and small
-        y_positions = [s['center_y'] for s in stripes]
-        spacings = [y_positions[j+1] - y_positions[j] for j in range(len(y_positions)-1)]
-        
-        if not spacings:
-            return False, 0, None
-        
-        avg_spacing = sum(spacings) / len(spacings)
-        
-        # Spacing should be within reasonable range for zebra crossings
-        if avg_spacing < Config.ZEBRA_MIN_SPACING or avg_spacing > Config.ZEBRA_MAX_SPACING:
-            return False, 0, None
-        
-        # Check spacing consistency
-        spacing_variance = sum(abs(s - avg_spacing) for s in spacings) / len(spacings)
-        spacing_consistency = 1 - (spacing_variance / avg_spacing) if avg_spacing > 0 else 0
-        
-        if spacing_consistency < (1 - Config.ZEBRA_SPACING_TOLERANCE):
-            return False, 0, None
-        
-        # Check 2: Stripes should be horizontally aligned (similar X centers)
-        x_centers = [s['center_x'] for s in stripes]
-        avg_x = sum(x_centers) / len(x_centers)
-        x_variance = sum(abs(x - avg_x) for x in x_centers) / len(x_centers)
-        
-        # Average width of stripes
-        avg_width = sum(s['width'] for s in stripes) / len(stripes)
-        
-        # X alignment should be good (variance less than half the stripe width)
-        alignment_score = max(0, 1 - (x_variance / (avg_width / 2))) if avg_width > 0 else 0
-        
-        if alignment_score < Config.ZEBRA_MIN_ALIGNMENT:
-            return False, 0, None
-        
-        # Check 3: Stripes should have similar widths
-        widths = [s['width'] for s in stripes]
-        width_variance = sum(abs(w - avg_width) for w in widths) / len(widths)
-        width_consistency = max(0, 1 - (width_variance / avg_width)) if avg_width > 0 else 0
-        
-        if width_consistency < 0.5:  # Widths should be at least 50% consistent
-            return False, 0, None
-        
-        # Check 4: Total crossing width should be reasonable
-        min_x = min(s['bbox'][0] for s in stripes)
-        max_x = max(s['bbox'][2] for s in stripes)
-        crossing_width = max_x - min_x
-        
-        if crossing_width < Config.ZEBRA_MIN_CROSSING_WIDTH:
-            return False, 0, None
-        
-        # Calculate overall confidence score
-        num_stripes_score = min(len(stripes) / 6, 1.0)  # More stripes = higher confidence
-        
-        confidence = (
-            spacing_consistency * 0.3 +
-            alignment_score * 0.25 +
-            width_consistency * 0.2 +
-            num_stripes_score * 0.25
-        )
-        
-        # Require minimum confidence
-        if confidence < 0.6:
-            return False, 0, None
-        
-        # Build crossing data
-        min_y = min(s['bbox'][1] for s in stripes)
-        max_y = max(s['bbox'][3] for s in stripes)
-        
-        crossing_data = {
-            'bbox': (min_x, min_y, max_x, max_y),
-            'num_stripes': len(stripes),
-            'confidence': confidence,
-            'avg_spacing': avg_spacing,
-            'avg_stripe_width': avg_width,
-            'crossing_width': crossing_width
-        }
-        
-        return True, confidence, crossing_data
+
     
     def draw_zebra_crossing(self, frame):
         """Draw detected zebra crossings on frame - only if actually detected"""
@@ -567,35 +739,19 @@ class ZebraCrossingDetector:
         for crossing in self.detected_crossings:
             x1, y1, x2, y2 = crossing['bbox']
             
-            # Draw bounding box
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 3)
+            # Draw bounding box around crossing
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 255), 2)
             
-            # Draw corner markers for better visibility
-            corner_len = 20
-            color = (0, 255, 255)  # Cyan
-            # Top-left
-            cv2.line(frame, (x1, y1), (x1 + corner_len, y1), color, 3)
-            cv2.line(frame, (x1, y1), (x1, y1 + corner_len), color, 3)
-            # Top-right
-            cv2.line(frame, (x2, y1), (x2 - corner_len, y1), color, 3)
-            cv2.line(frame, (x2, y1), (x2, y1 + corner_len), color, 3)
-            # Bottom-left
-            cv2.line(frame, (x1, y2), (x1 + corner_len, y2), color, 3)
-            cv2.line(frame, (x1, y2), (x1, y2 - corner_len), color, 3)
-            # Bottom-right
-            cv2.line(frame, (x2, y2), (x2 - corner_len, y2), color, 3)
-            cv2.line(frame, (x2, y2), (x2, y2 - corner_len), color, 3)
+            # Draw center line of crossing (the stop line reference)
+            center_y = crossing['center_y']
+            cv2.line(frame, (50, center_y), (frame.shape[1] - 50, center_y), (0, 255, 255), 3)
             
             # Draw label
-            label = f"ZEBRA CROSSING ({crossing['confidence']*100:.0f}%)"
-            stripes_info = f"{crossing['num_stripes']} stripes detected"
-            
+            label = f"CROSSING ({crossing['num_stripes']} stripes, {crossing['confidence']*100:.0f}%)"
             (w, h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-            cv2.rectangle(frame, (x1, y1 - h - 25), (x1 + w + 10, y1), (0, 255, 255), -1)
-            cv2.putText(frame, label, (x1 + 5, y1 - 15),
+            cv2.rectangle(frame, (x1, y1 - h - 10), (x1 + w + 10, y1), (0, 255, 255), -1)
+            cv2.putText(frame, label, (x1 + 5, y1 - 5),
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-            cv2.putText(frame, stripes_info, (x1 + 5, y1 - 2),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 0), 1)
         
         return frame
 
@@ -765,9 +921,9 @@ class LaneDetector:
 # ==================== VEHICLE TRACKING ====================
 
 class VehicleTrack:
-    """Track individual vehicle with comprehensive violation detection"""
+    """Track individual vehicle with violation detection"""
     
-    def __init__(self, track_id: int, bbox: tuple, timestamp: float, lane_detector: LaneDetector):
+    def __init__(self, track_id: int, bbox: tuple, timestamp: float, frame_width: int = 1280):
         self.track_id = track_id
         self.positions = deque(maxlen=Config.SPEED_CALCULATION_FRAMES)
         self.timestamps = deque(maxlen=Config.SPEED_CALCULATION_FRAMES)
@@ -780,18 +936,15 @@ class VehicleTrack:
         
         self.vehicle_class = None
         self.speed_kmh = 0.0
-        self.lane_detector = lane_detector
-        self.current_lane = lane_detector.get_vehicle_lane(bbox)
-        self.lane_changes = []
+        self.frame_width = frame_width
         
         # Violation flags
         self.violations = set()
         self.violation_recorded = set()
         
-        # Traffic signal violation
-        self.signal_state_when_crossed = None
-        self.crossed_stop_line = False
-        self.position_when_red = None
+        # Red light violation tracking
+        self.crossed_red_light_line = False
+        self.position_at_red_start = None
         
     def get_center(self, bbox):
         """Get center point of bounding box"""
@@ -804,16 +957,6 @@ class VehicleTrack:
         self.positions.append(center)
         self.timestamps.append(timestamp)
         self.bboxes.append(bbox)
-        
-        # Update lane
-        new_lane = self.lane_detector.get_vehicle_lane(bbox)
-        if new_lane != self.current_lane:
-            self.lane_changes.append({
-                'from': self.current_lane,
-                'to': new_lane,
-                'timestamp': timestamp
-            })
-            self.current_lane = new_lane
         
         # Calculate speed
         if len(self.positions) >= 2:
@@ -842,100 +985,125 @@ class VehicleTrack:
     
     def check_speed_violation(self):
         """Check if vehicle exceeds speed limit"""
-        if self.speed_kmh > Config.SPEED_LIMIT_KMH:
-            if 'speed' not in self.violations:
-                self.violations.add('speed')
-                return True
+        if len(self.positions) >= 5 and self.speed_kmh > 5:  # Minimum 5 km/h to avoid noise
+            if self.speed_kmh > Config.SPEED_LIMIT_KMH:
+                if 'speed' not in self.violations:
+                    self.violations.add('speed')
+                    logger.info(f"SPEED VIOLATION: Vehicle {self.track_id} at {self.speed_kmh:.1f} km/h (limit: {Config.SPEED_LIMIT_KMH} km/h)")
+                    return True
         return False
     
-    def check_red_light_violation(self, signal_state: str):
-        """Check if vehicle moves during red light"""
+    def check_red_light_violation(self, signal_state: str, red_light_line_y: int):
+        """
+        Check if vehicle crosses the road during RED signal.
+        Simple logic: If signal is RED and vehicle crosses the line, it's a violation.
+        """
         if signal_state == "RED":
-            if len(self.positions) >= 2:
-                # Check if vehicle moved significantly
-                x1, y1 = self.positions[-2]
-                x2, y2 = self.positions[-1]
-                movement = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+            if len(self.positions) >= 2 and len(self.bboxes) >= 1:
+                # Get current vehicle position (bottom of bounding box = front of vehicle)
+                x1, y1, x2, y2 = self.bboxes[-1]
+                vehicle_front_y = y2
                 
-                # Check if vehicle crossed stop line during red
-                current_y = y2
-                if current_y > Config.STOP_LINE_Y and movement > Config.MOVEMENT_THRESHOLD:
-                    if not self.crossed_stop_line:
-                        self.crossed_stop_line = True
-                        self.signal_state_when_crossed = "RED"
-                        
+                # Get previous position
+                prev_center_y = self.positions[-2][1] if len(self.positions) >= 2 else self.positions[-1][1]
+                curr_center_y = self.positions[-1][1]
+                
+                # Check if vehicle has crossed the red light line
+                # Vehicle was above line before and is now below (or on) the line
+                vehicle_crossed = vehicle_front_y > red_light_line_y
+                vehicle_moving_forward = curr_center_y > prev_center_y  # Moving down in frame = forward
+                
+                if vehicle_crossed and vehicle_moving_forward:
+                    if not self.crossed_red_light_line:
+                        self.crossed_red_light_line = True
                         if 'red_light' not in self.violations:
                             self.violations.add('red_light')
+                            logger.info(f"RED LIGHT VIOLATION: Vehicle {self.track_id} crossed line at Y={vehicle_front_y:.0f} during RED signal")
                             return True
         else:
-            # Reset when signal is not red
+            # Reset when signal turns GREEN
             if signal_state == "GREEN":
-                self.crossed_stop_line = False
+                self.crossed_red_light_line = False
         
-        return False
-    
-    def check_stop_line_violation(self, signal_state: str):
-        """Check if vehicle crossed stop line when it shouldn't"""
-        if signal_state in ["RED", "YELLOW"]:
-            if len(self.bboxes) > 0:
-                x1, y1, x2, y2 = self.bboxes[-1]
-                vehicle_front_y = y2  # Bottom of bbox is front of vehicle
-                
-                # Check if vehicle is beyond stop line
-                if vehicle_front_y > Config.STOP_LINE_Y + Config.STOP_LINE_THRESHOLD:
-                    if 'stop_line' not in self.violations and signal_state == "RED":
-                        self.violations.add('stop_line')
-                        return True
-        
-        return False
-    
-    def check_lane_violation(self):
-        """Check for improper lane changes"""
-        if len(self.lane_changes) > 2:  # Frequent lane changes
-            if 'lane_change' not in self.violations:
-                self.violations.add('lane_change')
-                return True
-        return False
-    
-    def check_wrong_lane(self):
-        """Check if vehicle is in wrong lane"""
-        if self.lane_detector.check_wrong_lane(self.bboxes[-1] if self.bboxes else (0, 0, 0, 0)):
-            if 'wrong_lane' not in self.violations:
-                self.violations.add('wrong_lane')
-                return True
         return False
     
     def check_unsafe_distance(self, other_track):
-        """Check if following distance is unsafe"""
+        """
+        Check if following distance is unsafe (vehicles too close in following scenario).
+        Only detects when one vehicle is directly behind another, not side-by-side.
+        """
         if len(self.positions) == 0 or len(other_track.positions) == 0:
             return False
         
-        # Calculate distance between vehicles
-        my_pos = self.positions[-1]
-        other_pos = other_track.positions[-1]
+        if len(self.bboxes) == 0 or len(other_track.bboxes) == 0:
+            return False
         
-        distance = np.sqrt((my_pos[0] - other_pos[0])**2 + (my_pos[1] - other_pos[1])**2)
+        # Get bounding boxes
+        my_bbox = self.bboxes[-1]
+        other_bbox = other_track.bboxes[-1]
         
-        # Check if in same lane and too close
-        if self.current_lane == other_track.current_lane:
-            if distance < Config.UNSAFE_DISTANCE_PIXELS:
-                if 'unsafe_distance' not in self.violations:
-                    self.violations.add('unsafe_distance')
-                    return True
+        my_x1, my_y1, my_x2, my_y2 = my_bbox
+        other_x1, other_y1, other_x2, other_y2 = other_bbox
+        
+        # Calculate center positions
+        my_center_x = (my_x1 + my_x2) / 2
+        my_center_y = (my_y1 + my_y2) / 2
+        other_center_x = (other_x1 + other_x2) / 2
+        other_center_y = (other_y1 + other_y2) / 2
+        
+        # Calculate horizontal and vertical distances
+        horizontal_diff = abs(my_center_x - other_center_x)
+        vertical_diff = abs(my_center_y - other_center_y)
+        
+        # Check if vehicles are roughly in the same lane (horizontally aligned)
+        # Allow up to 100 pixels horizontal difference (roughly same lane)
+        if horizontal_diff > 100:
+            return False  # Too far apart horizontally (different lanes)
+        
+        # Check vertical distance (following distance)
+        # One vehicle should be significantly behind/in front of the other
+        if vertical_diff < 50:
+            return False  # Side by side, not following
+        
+        # Calculate actual distance between centers
+        distance = np.sqrt(horizontal_diff**2 + vertical_diff**2)
+        
+        # Check if distance is unsafe
+        if distance < Config.UNSAFE_DISTANCE_PIXELS:
+            # Determine if one vehicle is following the other
+            # The following vehicle should be higher in the frame (lower Y value in typical camera view)
+            # and moving in same direction
+            
+            # Check if vehicles are moving in roughly the same direction
+            if len(self.positions) >= 2 and len(other_track.positions) >= 2:
+                my_prev_y = self.positions[-2][1]
+                other_prev_y = other_track.positions[-2][1]
+                
+                my_direction = my_center_y - my_prev_y  # Positive = moving down/forward
+                other_direction = other_center_y - other_prev_y
+                
+                # If moving in opposite directions, not a following scenario
+                if (my_direction * other_direction) < 0:
+                    return False
+            
+            # Valid unsafe distance violation
+            if 'unsafe_distance' not in self.violations:
+                self.violations.add('unsafe_distance')
+                logger.info(f"UNSAFE DISTANCE: Vehicle {self.track_id} too close ({distance:.1f}px, vertical: {vertical_diff:.1f}px) to Vehicle {other_track.track_id}")
+                return True
         
         return False
 
 # ==================== SINGLE STREAM MONITOR ====================
 
 class SingleStreamMonitor:
-    """Monitor a single video stream with comprehensive violation detection"""
+    """Monitor a single video stream with violation detection"""
     
     def __init__(self, stream_id: int):
         self.stream_id = stream_id
         self.vehicle_detector = YOLO('yolov8n.pt')
         self.traffic_light_detector = TrafficLightDetector()
         self.zebra_crossing_detector = ZebraCrossingDetector()
-        self.lane_detector = None  # Initialize when frame size is known
         
         self.active_tracks: Dict[int, VehicleTrack] = {}
         self.vehicle_count = defaultdict(int)
@@ -953,13 +1121,10 @@ class SingleStreamMonitor:
         self.current_signal_state = None  # None means no signal detected
         self.signal_confidence = 0.0
         
-        # Violation counters
+        # Violation counters (simplified: speed, red_light, unsafe_distance)
         self.violation_counts = {
             'speed': 0,
             'red_light': 0,
-            'stop_line': 0,
-            'lane_change': 0,
-            'wrong_lane': 0,
             'unsafe_distance': 0
         }
         
@@ -971,38 +1136,24 @@ class SingleStreamMonitor:
         self.video_writer = None
         self.output_path = None
         
-        logger.info(f"Stream Monitor {stream_id} initialized with real detection")
-    
-    def initialize_lane_detector(self, frame_width, frame_height):
-        """Initialize lane detector with frame dimensions"""
-        if self.lane_detector is None:
-            self.lane_detector = LaneDetector(frame_width, frame_height, Config.NUM_LANES)
+        logger.info(f"Stream Monitor {stream_id} initialized")
     
     def process_frame(self, frame):
-        """Process a single frame with all detection algorithms"""
+        """Process a single frame with detection algorithms"""
         start_time = time.time()
         
         # Resize frame
         frame = cv2.resize(frame, (Config.INPUT_WIDTH, Config.INPUT_HEIGHT))
         
-        # Initialize lane detector
-        if self.lane_detector is None:
-            self.initialize_lane_detector(frame.shape[1], frame.shape[0])
-        
-        # Detect traffic light state (only updates if actually detected)
+        # Detect traffic light state
         if Config.ENABLE_TRAFFIC_LIGHT_DETECTION:
             state, confidence = self.traffic_light_detector.detect_traffic_light_state(frame)
-            if state is not None:  # Only update if traffic light actually detected
+            if state is not None:
                 self.current_signal_state = state
                 self.signal_confidence = confidence
         
-        # Detect lane lines
-        if Config.ENABLE_ROAD_LINE_DETECTION and self.lane_detector:
-            self.lane_detector.detect_lane_lines(frame)
-        
-        # Detect zebra crossings
-        if Config.ENABLE_ZEBRA_DETECTION:
-            self.zebra_crossing_detector.detect_zebra_crossing(frame)
+        # Detect zebra crossings (for crossing line reference)
+        self.zebra_crossing_detector.detect_zebra_crossing(frame)
         
         # Detect and track vehicles
         current_time = time.time()
@@ -1055,7 +1206,7 @@ class SingleStreamMonitor:
                         # Update or create track
                         if track_id not in self.active_tracks:
                             self.active_tracks[track_id] = VehicleTrack(
-                                track_id, (x1, y1, x2, y2), current_time, self.lane_detector
+                                track_id, (x1, y1, x2, y2), current_time, Config.INPUT_WIDTH
                             )
                             self.total_vehicles += 1
                             self.vehicle_count[class_name] += 1
@@ -1071,7 +1222,6 @@ class SingleStreamMonitor:
                             'class': class_name,
                             'confidence': float(conf),
                             'speed': track.speed_kmh,
-                            'lane': track.current_lane,
                             'violations': list(track.violations)
                         })
         
@@ -1086,57 +1236,51 @@ class SingleStreamMonitor:
         return detections
     
     def check_all_violations(self, frame, current_time):
-        """Check all types of violations for all vehicles"""
+        """Check violations: speed, red light crossing, unsafe distance"""
         tracks_list = list(self.active_tracks.values())
         
-        # Check if traffic light is actually detected
+        # Determine crossing line position
+        # Use detected zebra crossing position if available, otherwise use frame center
+        frame_height = frame.shape[0]
+        if self.zebra_crossing_detector.is_detected and self.zebra_crossing_detector.crossing_y_position:
+            crossing_line_y = self.zebra_crossing_detector.crossing_y_position
+            logger.debug(f"Using detected crossing at Y={crossing_line_y}")
+        else:
+            # Fallback to middle of frame
+            crossing_line_y = int(frame_height * 0.55)
+        
+        # Check if traffic light is detected
         signal_detected = self.traffic_light_detector.is_detected
+        current_signal = self.current_signal_state if signal_detected else None
         
         for track in tracks_list:
-            # Speed violation (always check)
+            # 1. SPEED VIOLATION - Always check
             if track.check_speed_violation():
                 if 'speed' not in track.violation_recorded:
                     self.record_violation(frame, track, 'speed')
                     track.violation_recorded.add('speed')
             
-            # Red light violation (only if signal is detected)
-            if signal_detected and self.current_signal_state:
-                if track.check_red_light_violation(self.current_signal_state):
+            # 2. RED LIGHT VIOLATION - If RED signal and vehicle crosses line
+            if signal_detected and current_signal == "RED":
+                if track.check_red_light_violation(current_signal, crossing_line_y):
                     if 'red_light' not in track.violation_recorded:
                         self.record_violation(frame, track, 'red_light')
                         track.violation_recorded.add('red_light')
-            
-            # Stop line violation (only if signal is detected and there's a detected stop line)
-            if signal_detected and self.current_signal_state:
-                # Also check if we detected any stop lines
-                stop_lines = self.lane_detector.detect_stop_line(frame) if self.lane_detector else []
-                if stop_lines or self.zebra_crossing_detector.is_detected:
-                    if track.check_stop_line_violation(self.current_signal_state):
-                        if 'stop_line' not in track.violation_recorded:
-                            self.record_violation(frame, track, 'stop_line')
-                            track.violation_recorded.add('stop_line')
-            
-            # Lane violation (check if lanes detected)
-            if self.lane_detector and self.lane_detector.is_detected:
-                if track.check_lane_violation():
-                    if 'lane_change' not in track.violation_recorded:
-                        self.record_violation(frame, track, 'lane_change')
-                        track.violation_recorded.add('lane_change')
+            elif signal_detected and current_signal == "GREEN":
+                # Reset crossing flag when signal is green
+                track.check_red_light_violation(current_signal, crossing_line_y)
+        
+        # 3. UNSAFE DISTANCE VIOLATION - Check pairs only once
+        checked_pairs = set()
+        for i, track in enumerate(tracks_list):
+            for j in range(i + 1, len(tracks_list)):
+                other_track = tracks_list[j]
                 
-                # Wrong lane
-                if track.check_wrong_lane():
-                    if 'wrong_lane' not in track.violation_recorded:
-                        self.record_violation(frame, track, 'wrong_lane')
-                        track.violation_recorded.add('wrong_lane')
-            
-            # Unsafe distance (check against other vehicles - always active)
-            for other_track in tracks_list:
-                if other_track.track_id != track.track_id:
-                    if track.check_unsafe_distance(other_track):
-                        if 'unsafe_distance' not in track.violation_recorded:
-                            self.record_violation(frame, track, 'unsafe_distance')
-                            track.violation_recorded.add('unsafe_distance')
-                        break
+                # Check unsafe distance (only need to check once per pair)
+                if track.check_unsafe_distance(other_track):
+                    if 'unsafe_distance' not in track.violation_recorded:
+                        self.record_violation(frame, track, 'unsafe_distance')
+                        track.violation_recorded.add('unsafe_distance')
     
     def record_violation(self, frame, track: VehicleTrack, violation_type: str):
         """Record a violation"""
@@ -1149,7 +1293,6 @@ class SingleStreamMonitor:
             'track_id': int(track.track_id),
             'vehicle_class': str(track.vehicle_class) if track.vehicle_class else None,
             'speed_kmh': float(round(track.speed_kmh, 1)),
-            'lane': int(track.current_lane),
             'violation_type': str(violation_type),
             'signal_state': str(self.current_signal_state),
             'timestamp': datetime.now().isoformat()
@@ -1190,18 +1333,13 @@ class SingleStreamMonitor:
             del self.active_tracks[track_id]
     
     def draw_annotations(self, frame, vehicles):
-        """Draw all annotations on frame - only draws detected elements"""
+        """Draw annotations on frame"""
         annotated = frame.copy()
         
-        # Draw detected lane lines (only if actually detected)
-        if Config.ENABLE_ROAD_LINE_DETECTION and self.lane_detector:
-            annotated = self.lane_detector.draw_lanes(annotated)
+        # Draw detected zebra crossings (includes crossing line)
+        annotated = self.zebra_crossing_detector.draw_zebra_crossing(annotated)
         
-        # Draw detected zebra crossings (only if actually detected)
-        if Config.ENABLE_ZEBRA_DETECTION:
-            annotated = self.zebra_crossing_detector.draw_zebra_crossing(annotated)
-        
-        # Draw traffic light info (only if actually detected)
+        # Draw traffic light info (if detected)
         if Config.ENABLE_TRAFFIC_LIGHT_DETECTION:
             annotated = self.traffic_light_detector.draw_traffic_light_info(annotated)
         
@@ -1211,7 +1349,6 @@ class SingleStreamMonitor:
             track_id = vehicle['track_id']
             class_name = vehicle['class']
             speed = vehicle['speed']
-            lane = vehicle['lane']
             violations = vehicle['violations']
             
             # Color based on violations
@@ -1226,7 +1363,7 @@ class SingleStreamMonitor:
             cv2.rectangle(annotated, (x1, y1), (x2, y2), color, thickness)
             
             # Prepare labels
-            label = f"ID:{track_id} {class_name} L{lane+1}"
+            label = f"ID:{track_id} {class_name}"
             speed_label = f"{speed:.1f} km/h"
             
             # Draw labels
@@ -1247,44 +1384,37 @@ class SingleStreamMonitor:
                 badge_y = y2 + 20
                 for violation in violations:
                     violation_text = violation.upper()
-                    (vw, vh), _ = cv2.getTextSize(violation_text, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-                    cv2.rectangle(annotated, (x1, badge_y), (x1 + vw + 10, badge_y + vh + 5), (0, 0, 255), -1)
-                    cv2.putText(annotated, violation_text, (x1 + 5, badge_y + vh),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
-                    badge_y += vh + 10
+                    (vw, vh), _ = cv2.getTextSize(violation_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+                    cv2.rectangle(annotated, (x1, badge_y), (x1 + vw + 10, badge_y + vh + 8), (0, 0, 255), -1)
+                    cv2.putText(annotated, violation_text, (x1 + 5, badge_y + vh + 2),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                    badge_y += vh + 15
         
         # Draw statistics panel
         stats_y = 30
-        stats_bg_height = 170
+        stats_bg_height = 150
         cv2.rectangle(annotated, (5, 5), (420, stats_bg_height), (0, 0, 0), -1)
         cv2.rectangle(annotated, (5, 5), (420, stats_bg_height), (255, 255, 255), 2)
         
-        # Show signal status only if detected
+        # Show signal status
         signal_status = self.current_signal_state if self.traffic_light_detector.is_detected else "Not Detected"
         
-        # Detection status
-        detections = []
-        if self.traffic_light_detector.is_detected:
-            detections.append("Signal")
-        if self.lane_detector and self.lane_detector.is_detected:
-            detections.append("Lanes")
-        if self.zebra_crossing_detector.is_detected:
-            detections.append("Zebra")
-        detection_str = ", ".join(detections) if detections else "None"
+        # Calculate total violations
+        total_violations = sum(self.violation_counts.values())
         
         stats = [
-            f"Stream {self.stream_id} | FPS: {self.fps:.1f}",
-            f"Signal: {signal_status} | Vehicles: {self.total_vehicles}",
-            f"Active: {len(self.active_tracks)} | Avg Speed: {self.average_speed:.1f} km/h",
-            f"Detected: {detection_str}",
-            f"Violations: Speed={self.violation_counts['speed']} RedLight={self.violation_counts['red_light']}",
-            f"           StopLine={self.violation_counts['stop_line']} Lane={self.violation_counts['lane_change']}",
-            f"           WrongLane={self.violation_counts['wrong_lane']} Distance={self.violation_counts['unsafe_distance']}"
+            f"Stream {self.stream_id} | FPS: {self.fps:.1f} | Speed Limit: {Config.SPEED_LIMIT_KMH} km/h",
+            f"Signal: {signal_status} | Vehicles: {self.total_vehicles} | Active: {len(self.active_tracks)}",
+            f"Avg Speed: {self.average_speed:.1f} km/h",
+            f"--- VIOLATIONS (Total: {total_violations}) ---",
+            f"Speed: {self.violation_counts['speed']} | Red Light: {self.violation_counts['red_light']} | Unsafe Dist: {self.violation_counts['unsafe_distance']}"
         ]
         
         for i, stat in enumerate(stats):
-            cv2.putText(annotated, stat, (10, stats_y + i * 20),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+            # Highlight violations header
+            text_color = (0, 255, 255) if "VIOLATIONS" in stat else (255, 255, 255)
+            cv2.putText(annotated, stat, (10, stats_y + i * 24),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.45, text_color, 1)
         
         return annotated
 
@@ -1483,10 +1613,338 @@ class MultiStreamManager:
 
 manager = MultiStreamManager()
 
+# ==================== AUTH API ENDPOINTS ====================
+
+@app.post("/api/auth/signup", response_model=Token)
+async def signup(user_data: UserCreate):
+    """Register a new user"""
+    if database is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database not available"
+        )
+    
+    # Check if email already exists
+    existing_user = await get_user_by_email(user_data.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered"
+        )
+    
+    # Check if username already exists
+    existing_username = await get_user_by_username(user_data.username)
+    if existing_username:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Username already taken"
+        )
+    
+    # Create new user
+    hashed_password = get_password_hash(user_data.password)
+    new_user = {
+        "username": user_data.username,
+        "email": user_data.email,
+        "hashed_password": hashed_password,
+        "full_name": user_data.full_name,
+        "is_active": True,
+        "created_at": datetime.utcnow()
+    }
+    
+    result = await database.users.insert_one(new_user)
+    new_user["_id"] = result.inserted_id
+    
+    # Create access token
+    access_token = create_access_token(
+        data={"sub": user_data.email},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    
+    logger.info(f"New user registered: {user_data.email}")
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": str(new_user["_id"]),
+            "username": new_user["username"],
+            "email": new_user["email"],
+            "full_name": new_user["full_name"],
+            "is_active": new_user["is_active"],
+            "created_at": new_user["created_at"]
+        }
+    }
+
+@app.post("/api/auth/login", response_model=Token)
+async def login(form_data: UserLogin):
+    """Login user and return JWT token"""
+    if database is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database not available"
+        )
+    
+    user = await authenticate_user(form_data.email, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token = create_access_token(
+        data={"sub": user["email"]},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    
+    logger.info(f"User logged in: {user['email']}")
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": str(user["_id"]),
+            "username": user["username"],
+            "email": user["email"],
+            "full_name": user.get("full_name"),
+            "is_active": user.get("is_active", True),
+            "created_at": user["created_at"]
+        }
+    }
+
+@app.post("/api/auth/login/form")
+async def login_form(form_data: OAuth2PasswordRequestForm = Depends()):
+    """OAuth2 compatible login endpoint for form data"""
+    if database is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database not available"
+        )
+    
+    # OAuth2 uses username field, we'll accept email there
+    user = await authenticate_user(form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    access_token = create_access_token(
+        data={"sub": user["email"]},
+        expires_delta=timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
+@app.post("/api/auth/logout")
+async def logout(current_user: dict = Depends(get_current_active_user)):
+    """Logout user (client should delete token)"""
+    logger.info(f"User logged out: {current_user['email']}")
+    return {"message": "Successfully logged out"}
+
+@app.get("/api/auth/me", response_model=UserResponse)
+async def get_me(current_user: dict = Depends(get_current_active_user)):
+    """Get current user info"""
+    return {
+        "id": str(current_user["_id"]),
+        "username": current_user["username"],
+        "email": current_user["email"],
+        "full_name": current_user.get("full_name"),
+        "is_active": current_user.get("is_active", True),
+        "created_at": current_user["created_at"]
+    }
+
+@app.get("/api/auth/verify")
+async def verify_token(current_user: dict = Depends(get_current_active_user)):
+    """Verify if token is valid"""
+    return {
+        "valid": True,
+        "user": {
+            "id": str(current_user["_id"]),
+            "username": current_user["username"],
+            "email": current_user["email"]
+        }
+    }
+
+# ==================== VIOLATIONS DATABASE ENDPOINTS ====================
+
+@app.get("/api/db/violations")
+async def get_violations_from_db(
+    limit: int = 100,
+    skip: int = 0,
+    violation_type: Optional[str] = None,
+    stream_id: Optional[int] = None,
+    date_range: Optional[str] = None,
+    current_user: dict = Depends(get_optional_user)
+):
+    """
+    Get violations from MongoDB database.
+    Supports optional filters:
+    - violation_type
+    - stream_id
+    - date_range: one of ['yesterday', 'last_week', 'last_month', 'last_year']
+    """
+    if database is None:
+        # Fallback to in-memory violations
+        stats = manager.get_all_stats()
+        return {
+            "total": len(stats['violations']),
+            "violations": stats['violations'][:limit],
+            "source": "memory"
+        }
+    
+    # Build query filter
+    query: dict = {}
+    if violation_type:
+        query["violation_type"] = violation_type
+    if stream_id is not None:
+        query["stream_id"] = stream_id
+
+    # Date range filter
+    if date_range:
+        now = datetime.utcnow()
+        start_time: Optional[datetime] = None
+        end_time: Optional[datetime] = None
+
+        if date_range == "yesterday":
+            today_start = datetime(now.year, now.month, now.day)
+            start_time = today_start - timedelta(days=1)
+            end_time = today_start
+        elif date_range == "last_week":
+            start_time = now - timedelta(days=7)
+        elif date_range == "last_month":
+            start_time = now - timedelta(days=30)
+        elif date_range == "last_year":
+            start_time = now - timedelta(days=365)
+
+        if start_time:
+            if end_time:
+                query["timestamp"] = {"$gte": start_time, "$lt": end_time}
+            else:
+                query["timestamp"] = {"$gte": start_time}
+    
+    # Get total count
+    total = await database.violations.count_documents(query)
+    
+    # Get violations
+    cursor = database.violations.find(query).sort("timestamp", -1).skip(skip).limit(limit)
+    violations = []
+    async for violation in cursor:
+        violations.append({
+            "id": str(violation["_id"]),
+            "stream_id": violation["stream_id"],
+            "track_id": violation["track_id"],
+            "vehicle_class": violation.get("vehicle_class"),
+            "speed_kmh": violation["speed_kmh"],
+            "violation_type": violation["violation_type"],
+            "signal_state": violation.get("signal_state"),
+            "timestamp": violation["timestamp"].isoformat() if isinstance(violation["timestamp"], datetime) else violation["timestamp"],
+            "image_path": violation.get("image_path")
+        })
+    
+    return {
+        "total": total,
+        "violations": violations,
+        "source": "database"
+    }
+
+@app.delete("/api/db/violations/{violation_id}")
+async def delete_violation(
+    violation_id: str,
+    current_user: dict = Depends(get_current_active_user)
+):
+    """Delete a violation from database"""
+    if database is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database not available"
+        )
+    
+    result = await database.violations.delete_one({"_id": ObjectId(violation_id)})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Violation not found")
+    
+    return {"message": "Violation deleted", "id": violation_id}
+
+@app.delete("/api/db/violations")
+async def clear_all_violations(current_user: dict = Depends(get_current_active_user)):
+    """Clear all violations from database"""
+    if database is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Database not available"
+        )
+    
+    result = await database.violations.delete_many({})
+    return {"message": f"Deleted {result.deleted_count} violations"}
+
+async def save_violation_to_db(violation_data: dict):
+    """Save violation to MongoDB database"""
+    if database is None:
+        return None
+    
+    try:
+        # Prepare violation document
+        violation_doc = {
+            "stream_id": violation_data.get("stream_id"),
+            "track_id": violation_data.get("track_id"),
+            "vehicle_class": violation_data.get("vehicle_class"),
+            "speed_kmh": violation_data.get("speed_kmh"),
+            "violation_type": violation_data.get("violation_type"),
+            "signal_state": violation_data.get("signal_state"),
+            "timestamp": datetime.fromisoformat(violation_data["timestamp"]) if isinstance(violation_data["timestamp"], str) else violation_data["timestamp"],
+            "image_path": violation_data.get("image_path"),
+            "speed_limit": violation_data.get("speed_limit"),
+            "excess_speed": violation_data.get("excess_speed")
+        }
+        
+        result = await database.violations.insert_one(violation_doc)
+        logger.info(f"Violation saved to DB: {result.inserted_id}")
+        return str(result.inserted_id)
+    except Exception as e:
+        logger.error(f"Failed to save violation to DB: {e}")
+        return None
+
 # ==================== API ENDPOINTS ====================
 
 @app.get("/")
 async def root():
+    """
+    Serve the public landing page.
+    This is the first page users see, with Home/About/Project/Contact and a Get Started button.
+    """
+    # Primary path based on this script's directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    landing_path = os.path.join(script_dir, "frontend", "landing.html")
+
+    if os.path.exists(landing_path):
+        logger.info(f"Serving landing page from: {landing_path}")
+        return FileResponse(landing_path, media_type="text/html")
+
+    # Fallbacks if needed
+    fallback_paths = [
+        Path.cwd() / "frontend" / "landing.html",
+        Path("frontend/landing.html"),
+    ]
+
+    for path in fallback_paths:
+        if path.exists():
+            logger.info(f"Serving landing page from fallback: {path}")
+            return FileResponse(str(path), media_type="text/html")
+
+    logger.error(f"Landing page not found. Script dir: {script_dir}, CWD: {Path.cwd()}")
+    raise HTTPException(
+        status_code=404,
+        detail="Landing page not found"
+    )
+
+@app.get("/api/info")
+async def api_info():
+    """API information endpoint"""
     return {
         "message": "Complete Traffic Monitoring System API v4.0",
         "version": "4.0.0",
@@ -1516,10 +1974,20 @@ async def health():
     }
 
 @app.post("/api/start-stream/{stream_id}")
-async def start_stream(stream_id: int, stream_url: str, save_output: bool = True):
+async def start_stream(stream_id: int, stream_url: str = Query(...), save_output: bool = Query(True)):
     """Start a specific stream"""
     if stream_id < 0 or stream_id >= Config.MAX_STREAMS:
         raise HTTPException(status_code=400, detail=f"Stream ID must be between 0 and {Config.MAX_STREAMS-1}")
+    
+    if not stream_url:
+        raise HTTPException(status_code=400, detail="stream_url parameter is required")
+    
+    logger.info(f"Starting stream {stream_id} with URL: {stream_url[:100]}...")
+    
+    # Check if it's a YouTube URL
+    is_youtube = 'youtube.com' in stream_url or 'youtu.be' in stream_url
+    if is_youtube:
+        logger.info("Detected YouTube URL, extracting stream...")
     
     success = manager.start_stream(stream_id, stream_url, save_output)
     if success:
@@ -1527,10 +1995,14 @@ async def start_stream(stream_id: int, stream_url: str, save_output: bool = True
             "status": "started",
             "stream_id": stream_id,
             "stream_url": stream_url,
-            "save_output": save_output
+            "save_output": save_output,
+            "is_youtube": is_youtube
         }
     else:
-        raise HTTPException(status_code=400, detail="Failed to start stream")
+        error_msg = "Failed to start stream"
+        if is_youtube:
+            error_msg = "Failed to extract YouTube stream URL. Please check if yt-dlp is installed and the URL is valid."
+        raise HTTPException(status_code=400, detail=error_msg)
 
 @app.post("/api/stop-stream/{stream_id}")
 async def stop_stream(stream_id: int):
@@ -1602,21 +2074,79 @@ async def upload_video(stream_id: int, file: UploadFile = File(...), save_output
         logger.error(f"Upload error for stream {stream_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Docker/Render"""
+    return {
+        "status": "healthy",
+        "service": "Traffic Monitoring System",
+        "version": "4.0.0",
+        "timestamp": datetime.now().isoformat()
+    }
+
 @app.get("/api/stats")
 async def get_stats():
     """Get comprehensive statistics from all streams"""
     return manager.get_all_stats()
 
 @app.get("/api/violations")
-async def get_violations(limit: int = 100, violation_type: str = None):
-    """Get violations from all streams"""
+async def get_violations(
+    limit: int = 100,
+    violation_type: Optional[str] = None,
+    date_range: Optional[str] = None
+):
+    """
+    Get violations from all streams (in-memory).
+    Optional filters:
+    - violation_type
+    - date_range: one of ['yesterday', 'last_week', 'last_month', 'last_year']
+    """
     stats = manager.get_all_stats()
     violations = stats['violations']
-    
+
     # Filter by type if specified
     if violation_type:
-        violations = [v for v in violations if v['violation_type'] == violation_type]
-    
+        violations = [v for v in violations if v.get('violation_type') == violation_type]
+
+    # Date-range filter (in-memory)
+    if date_range:
+        now = datetime.utcnow()
+        start_time: Optional[datetime] = None
+        end_time: Optional[datetime] = None
+
+        if date_range == "yesterday":
+            today_start = datetime(now.year, now.month, now.day)
+            start_time = today_start - timedelta(days=1)
+            end_time = today_start
+        elif date_range == "last_week":
+            start_time = now - timedelta(days=7)
+        elif date_range == "last_month":
+            start_time = now - timedelta(days=30)
+        elif date_range == "last_year":
+            start_time = now - timedelta(days=365)
+
+        if start_time:
+            filtered = []
+            for v in violations:
+                ts = v.get("timestamp")
+                if not ts:
+                    continue
+                try:
+                    if isinstance(ts, str):
+                        ts_dt = datetime.fromisoformat(ts)
+                    else:
+                        ts_dt = ts
+                except Exception:
+                    continue
+
+                if end_time:
+                    if start_time <= ts_dt < end_time:
+                        filtered.append(v)
+                else:
+                    if ts_dt >= start_time:
+                        filtered.append(v)
+            violations = filtered
+
     return {
         "total": len(violations),
         "violation_summary": stats['violation_summary'],
@@ -1728,28 +2258,47 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.websocket_clients.discard(websocket)
 
 @app.get("/dashboard")
-async def dashboard():
-    """Serve dashboard"""
-    dashboard_path = Path("frontend/dashboard.html")
-    if dashboard_path.exists():
-        return FileResponse(dashboard_path)
-    else:
-        raise HTTPException(status_code=404, detail="Dashboard not found")
-
-# Serve static files
-try:
-    if Path("frontend").exists():
-        app.mount("/", StaticFiles(directory="frontend", html=True), name="static")
-except Exception as e:
-    logger.warning(f"Could not mount static files: {e}")
+async def serve_dashboard():
+    """Serve dashboard HTML page"""
+    # Get the directory where this script is located using os.path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    dashboard_path = os.path.join(script_dir, "frontend", "dashboard.html")
+    
+    logger.info(f"Looking for dashboard at: {dashboard_path}")
+    
+    if os.path.exists(dashboard_path):
+        logger.info(f"Serving dashboard from: {dashboard_path}")
+        return FileResponse(dashboard_path, media_type="text/html")
+    
+    # Fallback paths
+    fallback_paths = [
+        Path.cwd() / "frontend" / "dashboard.html",
+        Path("frontend/dashboard.html"),
+    ]
+    
+    for path in fallback_paths:
+        if path.exists():
+            logger.info(f"Serving dashboard from fallback: {path}")
+            return FileResponse(str(path), media_type="text/html")
+    
+    logger.error(f"Dashboard not found. Script dir: {script_dir}, CWD: {Path.cwd()}")
+    
+    raise HTTPException(
+        status_code=404, 
+        detail="Dashboard not found"
+    )
 
 @app.on_event("startup")
 async def startup_event():
+    # Connect to MongoDB
+    await connect_to_mongodb()
+    
     logger.info("=" * 70)
     logger.info("Complete Traffic Monitoring System v4.0 Started")
     logger.info(f"Maximum Streams: {Config.MAX_STREAMS}")
     logger.info(f"Speed Limit: {Config.SPEED_LIMIT_KMH} km/h")
     logger.info(f"Violation Types: Speed, Red Light, Stop Line, Lane, Wrong Lane, Distance")
+    logger.info(f"MongoDB: {'Connected' if database is not None else 'Not Connected (using memory)'}")
     logger.info("=" * 70)
     
     # Start background task to process violation queue
@@ -1763,6 +2312,11 @@ async def process_violation_queue():
             # Check queue for new violations (non-blocking)
             try:
                 violation_data = manager.violation_queue.get_nowait()
+                
+                # Save to MongoDB
+                await save_violation_to_db(violation_data)
+                
+                # Broadcast to WebSocket clients
                 await manager.broadcast_violation(violation_data)
             except queue.Empty:
                 pass  # No violations to process
@@ -1777,6 +2331,10 @@ async def process_violation_queue():
 async def shutdown_event():
     for stream_id in list(manager.streams.keys()):
         manager.stop_stream(stream_id)
+    
+    # Close MongoDB connection
+    await close_mongodb_connection()
+    
     logger.info("Complete Traffic Monitoring System stopped")
 
 if __name__ == "__main__":
