@@ -1,4 +1,0 @@
-torch==2.1.1
-torchvision==0.16.1
-ultralytics==8.0.220
-easyocr==1.7.0

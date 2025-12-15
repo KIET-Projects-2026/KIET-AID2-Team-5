@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # MongoDB Database
+  mongodb:
+    image: mongo:7.0
+    container_name: tms-mongodb
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=traffic_monitoring
+    networks:
+      - tms-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/traffic_monitoring --quiet
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  # Traffic Monitoring System Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tms-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MONGODB_URL=mongodb://mongodb:27017
+      - DATABASE_NAME=traffic_monitoring
+      - SECRET_KEY=${SECRET_KEY:-your-super-secret-key-change-in-production-2024}
+    volumes:
+      - ./data:/app/data
+      - ./frontend:/app/frontend
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - tms-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+networks:
+  tms-network:
+    driver: bridge
+
+volumes:
+  mongodb_data:
+    driver: local

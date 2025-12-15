@@ -4,38 +4,38 @@ uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 websockets==12.0
 
-# Computer Vision
-opencv-python==4.8.1.78
+# Computer Vision (headless = no GUI, smaller size)
+opencv-python-headless==4.8.1.78
 numpy==1.24.3
 pillow==10.1.0
 
-# Deep Learning
-torch==2.1.1
-torchvision==0.16.1
+# Deep Learning - YOLOv8 (auto-installs torch)
 ultralytics==8.0.220
+lapx>=0.5.2
 
-# OCR (Optional - for license plate reading)
-easyocr==1.7.0
-
-# Utilities
-python-dotenv==1.0.0
-pyyaml==6.0.1
-tqdm==4.66.1
+# Async file handling
+aiofiles==23.2.1
 
 # For YouTube streams (Required)
-yt-dlp>=2024.01.01
+yt-dlp>=2025.01.01
 pafy==0.5.5
 
 # Add for video streaming support
 requests==2.31.0
-streamlink>=6.0.0
+streamlink==6.5.0
 
-# Optional: For better video handling
-imageio==2.33.1
-imageio-ffmpeg==0.4.9
+# PyTorch (CPU version for deployment)
+torch==2.1.1
+torchvision==0.16.1
 
-# Optional Development Tools
-# pytest==7.4.3
-# pytest-asyncio==0.21.1
-# black==23.11.0
-# flake8==6.1.0
+# MongoDB Database
+motor==3.3.2
+pymongo==4.6.1
+
+# Authentication
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+bcrypt==4.1.2
+
+# Pydantic for data validation
+pydantic[email]==2.5.2
