@@ -1,137 +1,127 @@
-// API Configuration - Auto-detect environment
-const API_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? 'http://localhost:8000'
-    : 'https://trafficmonitoringsystem.onrender.com';
 
-const WS_BASE = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? 'ws://localhost:8000'
-    : 'wss://trafficmonitoringsystem.onrender.com';
+      // ==================== CONFIGURATION ====================
+        // Auto-detect API URL: Use Render backend URL in production, localhost in development
+        // IMPORTANT: Replace 'YOUR_RENDER_APP_NAME' with your actual Render service name after deployment
+        const API_BASE_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:8000'
+            : 'https://traffic-monitoring-api.onrender.com';  // <-- UPDATE THIS with your Render URL
+        
+        const WS_BASE_URL = API_BASE_URL.replace('http', 'ws').replace('https', 'wss');
+        const POLL_INTERVAL = 2000; // 2 seconds
+        const STREAM_POLL_INTERVAL = 1000; // 1 second for stream frames
 
-console.log('Environment detected:', window.location.hostname);
-console.log('API Base:', API_BASE);
-console.log('WebSocket Base:', WS_BASE);
+        console.log('🚀 Traffic Monitoring System');
+        console.log('📡 API URL:', API_BASE_URL);
+        console.log('🔌 WebSocket URL:', WS_BASE_URL);
 
-let ws = null;
-let allViolations = [];
-let streamStates = [false, false, false, false];
-let streamIntervals = [null, null, null, null];
-let streamRetryCount = [0, 0, 0, 0];
-const MAX_RETRY_COUNT = 10;
+        // Global state
+        let systemStats = {};
+        let activeStreams = new Set();
+        let pollInterval = null;
+        let streamPollIntervals = {};
+        let currentUser = null;
+        let authToken = null;
+        let violationsByTypeChart = null;
+        let streamsVehiclesChart = null;
+        let violationsOverTimeChart = null;
+        let analyticsDateRange = 'all';
 
-// ==================== STREAM RENDERING ====================
-
-function startStreamRendering(streamId) {
-    const imgElement = document.getElementById(`stream${streamId}`);
-    const placeholder = document.getElementById(`placeholder${streamId}`);
-    
-    if (!imgElement) {
-        console.error(`Stream ${streamId}: Image element not found`);
-        return;
-    }
-    
-    // Reset retry count when starting fresh
-    streamRetryCount[streamId] = 0;
-    
-    console.log(`Starting stream rendering for stream ${streamId}`);
-    
-    // Hide placeholder, show video
-    if (placeholder) placeholder.style.display = 'none';
-    imgElement.style.display = 'block';
-    
-    // Clear any existing interval
-    if (streamIntervals[streamId]) {
-        clearInterval(streamIntervals[streamId]);
-        streamIntervals[streamId] = null;
-    }
-    
-    // Use frame polling approach which is more reliable across browsers
-    // MJPEG streams can be problematic with img.onerror in some browsers
-    streamStates[streamId] = 'polling';
-    startFramePolling(streamId);
-}
-
-function startFramePolling(streamId) {
-    const imgElement = document.getElementById(`stream${streamId}`);
-    const placeholder = document.getElementById(`placeholder${streamId}`);
-    
-    if (!imgElement) return;
-    
-    console.log(`Stream ${streamId}: Starting frame polling`);
-    
-    // Clear any existing interval
-    if (streamIntervals[streamId]) {
-        clearInterval(streamIntervals[streamId]);
-    }
-    
-    let consecutiveErrors = 0;
-    const maxConsecutiveErrors = 30; // About 3 seconds of errors
-    
-    function pollFrame() {
-        if (streamStates[streamId] === false) {
-            console.log(`Stream ${streamId}: Stopping frame polling (stream stopped)`);
-            if (streamIntervals[streamId]) {
-                clearInterval(streamIntervals[streamId]);
-                streamIntervals[streamId] = null;
-            }
-            return;
+        // ==================== AUTH FUNCTIONS ====================
+        
+        function showAuthModal() {
+            document.getElementById('authModal').classList.add('active');
+            document.getElementById('loginEmail').focus();
         }
-        
-        const frameUrl = `${API_BASE}/stream/${streamId}/frame?t=${Date.now()}`;
-        
-        // Create temporary image to test load
-        const tempImg = new Image();
-        
-        tempImg.onload = () => {
-            consecutiveErrors = 0;
-            streamRetryCount[streamId] = 0;
-            
-            // Update the actual image element
-            imgElement.src = tempImg.src;
-            imgElement.style.display = 'block';
-            
-            if (placeholder) {
-                placeholder.style.display = 'none';
-            }
-        };
-        
-        tempImg.onerror = () => {
-            consecutiveErrors++;
-            console.warn(`Stream ${streamId}: Frame polling error (${consecutiveErrors}/${maxConsecutiveErrors})`);
-            
-            if (consecutiveErrors >= maxConsecutiveErrors) {
-                console.error(`Stream ${streamId}: Too many errors, checking stream status...`);
-                checkStreamStatus(streamId);
-            }
-        };
-        
-        tempImg.src = frameUrl;
-    }
-    
-    // Start polling at ~15 FPS for smooth playback
-    streamIntervals[streamId] = setInterval(pollFrame, 66);
-    
-    // Initial poll
-    pollFrame();
-}
 
-async function checkStreamStatus(streamId) {
-    try {
-        const response = await fetch(`${API_BASE}/api/stats`);
-        const data = await response.json();
-        
-        const stream = data.streams?.find(s => s.stream_id === streamId);
-        
-        if (!stream || !stream.processing) {
-            console.log(`Stream ${streamId}: Stream is not active, stopping polling`);
-            stopStreamRendering(streamId);
-        } else {
-            // Stream is still active, continue polling
-            streamRetryCount[streamId]++;
+        function hideAuthModal() {
+            document.getElementById('authModal').classList.remove('active');
+            clearAuthError();
+            // Reset forms
+            document.getElementById('loginForm').reset();
+            document.getElementById('signupForm').reset();
+        }
+
+        function switchAuthTab(tab) {
+            const tabs = document.querySelectorAll('.auth-tab');
+            const forms = document.querySelectorAll('.auth-form');
             
-            if (streamRetryCount[streamId] >= MAX_RETRY_COUNT) {
-                console.error(`Stream ${streamId}: Max retries exceeded`);
-                showNotification('error', `Stream ${streamId + 1} connection lost. Please restart the stream.`);
-                stopStreamRendering(streamId);
+            tabs.forEach(t => t.classList.remove('active'));
+            forms.forEach(f => f.classList.remove('active'));
+            
+            if (tab === 'login') {
+                tabs[0].classList.add('active');
+                document.getElementById('loginForm').classList.add('active');
+            } else {
+                tabs[1].classList.add('active');
+                document.getElementById('signupForm').classList.add('active');
+            }
+            clearAuthError();
+        }
+
+        function showAuthError(message) {
+            const errorEl = document.getElementById('authError');
+            document.getElementById('authErrorText').textContent = message;
+            errorEl.classList.add('show');
+        }
+
+        function clearAuthError() {
+            document.getElementById('authError').classList.remove('show');
+        }
+
+        function setButtonLoading(btnId, loading) {
+            const btn = document.getElementById(btnId);
+            if (loading) {
+                btn.disabled = true;
+                btn.innerHTML = '<div class="spinner"></div><span>Please wait...</span>';
+            } else {
+                btn.disabled = false;
+                btn.innerHTML = '<span>' + (btnId.includes('login') ? 'Login' : 'Create Account') + '</span>';
+            }
+        }
+
+        async function handleLogin(event) {
+            event.preventDefault();
+            clearAuthError();
+            setButtonLoading('loginSubmitBtn', true);
+
+            const email = document.getElementById('loginEmail').value;
+            const password = document.getElementById('loginPassword').value;
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.detail || 'Login failed');
+                }
+
+                // Store token and user data
+                authToken = data.access_token;
+                currentUser = data.user;
+                
+                // Save to localStorage
+                localStorage.setItem('authToken', authToken);
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+                // Update UI
+                updateAuthUI();
+                hideAuthModal();
+                showToast(`Welcome back, ${currentUser.username}!`, 'success');
+                
+                // Redirect to analytics page
+                navigateTo('analytics');
+                
+            } catch (error) {
+                showAuthError(error.message);
+            } finally {
+                setButtonLoading('loginSubmitBtn', false);
             }
         }
 
