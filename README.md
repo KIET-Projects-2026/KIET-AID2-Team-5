@@ -90,8 +90,7 @@ cd traffic-monitoring-system
 #### Option A: Using Python Virtual Environment (Recommended)
 ```bash
 # Create virtual environment
-python -m venv tms_env
-
+py -3.10 -m venv venv
 # Activate virtual environment
 # Windows:
 tms_env\Scripts\activate
@@ -99,6 +98,9 @@ tms_env\Scripts\activate
 source tms_env/bin/activate
 
 # Install dependencies
+
+py -m pip install --upgrade pip
+
 pip install -r requirements.txt
 ```
 
@@ -152,7 +154,7 @@ Example `.env` configuration:
 ```env
 # Backend
 SECRET_KEY=your-unique-secret-key-here
-MONGODB_URL=mongodb://localhost:27017
+MONGODB_URL=mongodb+srv://trafficflow:trafficflow@trafficflow.re8tcga.mongodb.net/
 DATABASE_NAME=traffic_monitoring
 
 # Frontend (Production URLs - update when deployed)

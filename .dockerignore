@@ -1,31 +1,23 @@
-# Git
-.git
-.gitignore
-
 # Python
-__pycache__
+__pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-.venv
+env/
 venv/
 ENV/
+tms_env/
+
+# Data directories (will be mounted as volumes)
+data/uploads/*
+data/output/*
+data/violations/*
+data/logs/*
+
+# Git
+.git/
+.gitignore
 
 # IDE
 .vscode/
@@ -33,30 +25,18 @@ ENV/
 *.swp
 *.swo
 
-# Data directories (will be created at runtime)
-data/violations/*
-data/logs/*
-data/uploads/*
-data/output/*
-
-# Keep the directories but not their contents
-!data/violations/.gitkeep
-!data/logs/.gitkeep
-!data/uploads/.gitkeep
-!data/output/.gitkeep
-
-# Frontend (deployed separately)
-frontend/
-
-# Documentation
-*.md
-README*
-
-# Test files
-test_*
-*_test.py
-
-# Misc
+# OS
 .DS_Store
 Thumbs.db
-*.log
+
+# Docker
+docker-compose.override.yml
+
+# Environment
+.env.local
+.env.*.local
+
+# Documentation
+README.md
+LICENSE
+*.md

@@ -117,7 +117,7 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=Fals
 
 # ==================== MONGODB CONFIGURATION ====================
 
-MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
+MONGODB_URL = os.getenv("MONGODB_URL", "mongodb+srv://trafficflow:trafficflow@trafficflow.re8tcga.mongodb.net/")
 DATABASE_NAME = os.getenv("DATABASE_NAME", "traffic_monitoring")
 
 # MongoDB client (initialized on startup)
