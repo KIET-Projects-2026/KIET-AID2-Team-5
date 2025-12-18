@@ -3,19 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TMS - Traffic Monitoring System</title>
+    <title>TrafficFlow - Intelligent Traffic Analytics</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/frontend/styles.css">
 </head>
 <body>
-    <!-- Public Landing Navbar -->
     <nav class="navbar">
         <div class="navbar-container">
             <div class="navbar-brand">
-                <div class="logo-container">
-                    <div class="logo-signal"></div>
-                </div>
-                <span class="brand-text">TMS - Traffic Monitoring</span>
+                <img src="/frontend/Logo.png" alt="TrafficFlow Logo" class="brand-logo">
             </div>
             <div class="navbar-menu">
                 <a class="nav-link active" href="#home">
@@ -40,14 +36,12 @@
         </div>
     </nav>
 
-    <!-- Landing Content -->
     <main class="main-content landing-page">
-        <!-- Home / Hero Section -->
         <section id="home" class="landing-container">
             <div class="landing-hero">
                 <div class="hero-logo">
                     <div class="logo-large">
-                        <div class="logo-icon">TMS</div>
+                        <div class="logo-icon">TrafficFlow</div>
                         <div class="signal-pulse"></div>
                     </div>
                 </div>
@@ -67,25 +61,6 @@
                     </button>
                 </div>
 
-                <div class="hero-features">
-                    <div class="feature-item">
-                        <i class="fas fa-video"></i>
-                        <span>Multi-camera live stream monitoring</span>
-                    </div>
-                    <div class="feature-item">
-                        <i class="fas fa-tachometer-alt"></i>
-                        <span>Accurate vehicle speed estimation</span>
-                    </div>
-                    <div class="feature-item">
-                        <i class="fas fa-traffic-light"></i>
-                        <span>Red light and signal violation detection</span>
-                    </div>
-                    <div class="feature-item">
-                        <i class="fas fa-road"></i>
-                        <span>Lane, stop-line and unsafe distance violations</span>
-                    </div>
-                </div>
-
                 <div class="hero-stats">
                     <div class="stat-item">
                         <div class="stat-number">4+</div>
@@ -103,7 +78,6 @@
             </div>
         </section>
 
-        <!-- About Section -->
         <section id="about" class="grid-section">
             <div class="section-title">
                 <i class="fas fa-circle-info"></i>
@@ -120,7 +94,7 @@
                     estimates their speed, detects violations, and stores structured records in
                     a database for analysis and reporting.
                 </p>
-                <p style="margin-top: 1rem;">
+                <p>
                     This project is designed for smart cities, traffic departments, and
                     academic research, demonstrating how AI can be integrated with live streams
                     to improve safety, enforcement, and traffic flow management.
@@ -128,7 +102,6 @@
             </div>
         </section>
 
-        <!-- Project Details Section -->
         <section id="project" class="grid-section">
             <div class="section-title">
                 <i class="fas fa-project-diagram"></i>
@@ -170,7 +143,6 @@
             </div>
         </section>
 
-        <!-- Contact Section -->
         <section id="contact" class="grid-section">
             <div class="section-title">
                 <i class="fas fa-envelope-open-text"></i>
@@ -181,23 +153,17 @@
                     For project-related queries, collaboration, or academic discussions, feel
                     free to reach out to the team.
                 </p>
-                <div style="margin-top: 1.5rem; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.5rem;">
-                    <div>
-                        <h4 style="font-size:14px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.5rem; color:var(--text-secondary);">
-                            Email
-                        </h4>
+                <div class="contact-details-grid">
+                    <div class="contact-item">
+                        <h4 class="contact-label">Email</h4>
                         <p><a href="mailto:support@tms.com">support@tms.com</a></p>
                     </div>
-                    <div>
-                        <h4 style="font-size:14px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.5rem; color:var(--text-secondary);">
-                            Project Dashboard
-                        </h4>
+                    <div class="contact-item">
+                        <h4 class="contact-label">Project Dashboard</h4>
                         <p><a href="/dashboard">Open Monitoring Dashboard (after login)</a></p>
                     </div>
-                    <div>
-                        <h4 style="font-size:14px; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:0.5rem; color:var(--text-secondary);">
-                            Get Started
-                        </h4>
+                    <div class="contact-item">
+                        <h4 class="contact-label">Get Started</h4>
                         <p>
                             Click the <strong>Get Started</strong> button in the top-right
                             to sign up or log in and access the secure dashboard.
@@ -208,7 +174,6 @@
         </section>
     </main>
 
-    <!-- Auth Modal (shared with dashboard, but redirects to /dashboard after login) -->
     <div class="auth-overlay" id="authModal">
         <div class="auth-container">
             <div class="auth-header">
@@ -227,7 +192,6 @@
                 <span id="authErrorText">Error message</span>
             </div>
 
-            <!-- Login Form -->
             <form class="auth-form active" id="loginForm" onsubmit="handleLogin(event)">
                 <div class="form-group">
                     <label class="form-label">Email Address</label>
@@ -248,7 +212,6 @@
                 </button>
             </form>
 
-            <!-- Signup Form -->
             <form class="auth-form" id="signupForm" onsubmit="handleSignup(event)">
                 <div class="form-group">
                     <label class="form-label">Full Name</label>
@@ -287,14 +250,13 @@
                 <span>Secure Access</span>
             </div>
 
-            <p style="text-align: center; font-size: 12px; color: var(--text-secondary);">
-                <i class="fas fa-shield-alt" style="color: var(--primary);"></i>
+            <p class="auth-security-note">
+                <i class="fas fa-shield-alt"></i>
                 Your account protects access to the live monitoring dashboard and violation records.
             </p>
         </div>
     </div>
 
-    <!-- Footer (public) -->
     <footer class="footer">
         <div class="footer-content">
             <div class="footer-section">
@@ -319,9 +281,6 @@
         </div>
     </footer>
 
-    <script src="/frontend/landing.js"></script>
+    <script src="/frontend/script.js"></script>
 </body>
 </html>
-
-
-
