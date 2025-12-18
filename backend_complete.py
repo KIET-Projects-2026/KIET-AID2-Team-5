@@ -85,7 +85,11 @@ if os.getenv("DEBUG", "false").lower() == "true":
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=[
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+        "https://trafficflow.onrender.com",  # Add your actual Render URL
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
