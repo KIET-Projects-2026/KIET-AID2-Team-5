@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TMS - Monitoring Overview Dashboard</title>
+    <title>TMS - Traffic Analytics</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/frontend/styles.css">
 </head>
@@ -15,13 +15,13 @@
                 <img src="/frontend/Logo.png" alt="TMS Logo" class="brand-logo">
             </div>
             <div class="navbar-menu">
-                <a class="nav-link" href="analytics.html">
+                <a class="nav-link active" href="analytics.html">
                     <i class="fas fa-chart-line"></i> Analytics
                 </a>
                 <a class="nav-link" href="monitoring.html">
                     <i class="fas fa-video"></i> Monitoring
                 </a>
-                <a class="nav-link active" href="dashboard.html">
+                <a class="nav-link" href="dashboard.html">
                     <i class="fas fa-gauge"></i> Overview
                 </a>
             </div>
@@ -49,7 +49,7 @@
                             <i class="fas fa-video"></i>
                             <span>Monitoring</span>
                         </div>
-                        <!-- Violations are now reviewed from this Overview dashboard -->
+                        <!-- Violations are now reviewed from the Overview dashboard -->
                         <div class="dropdown-divider"></div>
                         <button class="dropdown-item dropdown-item-danger" onclick="logout()">
                             <i class="fas fa-sign-out-alt"></i>
@@ -65,20 +65,39 @@
     <div class="dashboard-main">
         <div class="page-header">
             <h1 class="page-title">
-                <i class="fas fa-gauge"></i>
-                Monitoring Overview
+                <i class="fas fa-chart-line"></i>
+                Traffic Analytics
             </h1>
-            <p class="page-subtitle">
-                High-level summary of live streams, violations and system status.
-            </p>
         </div>
 
-        <!-- Overview Stats -->
+        <!-- Analytics Date Range Filter -->
         <section class="content-section">
             <div class="section-header">
                 <h2 class="section-title">
-                    <i class="fas fa-circle-info"></i>
-                    System Snapshot
+                    <i class="fas fa-clock-rotate-left"></i>
+                    Analytics Period
+                </h2>
+            </div>
+            <div class="filter-container">
+                <select id="analyticsDateFilter" class="form-select" onchange="updateAnalyticsRange()">
+                    <option value="all">All Time</option>
+                    <option value="today">Today</option>
+                    <option value="yesterday">Yesterday</option>
+                    <option value="last_week">Last 7 Days</option>
+                    <option value="last_month">Last 30 Days</option>
+                    <option value="last_year">Last Year</option>
+                    <option value="custom">Specific Date…</option>
+                </select>
+                <input type="date" id="analyticsDatePicker" class="form-input" onchange="updateAnalyticsRange()">
+            </div>
+        </section>
+
+        <!-- Live Monitoring Status -->
+        <section class="content-section">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <i class="fas fa-camera-security"></i>
+                    Live Monitoring Status
                 </h2>
             </div>
             <div class="stats-grid">
@@ -98,7 +117,7 @@
                     <i class="fas fa-exclamation-triangle stat-card-icon"></i>
                     <div class="stat-card-label">Total Violations</div>
                     <div class="stat-card-value" id="totalViolations">0</div>
-                    <div class="stat-card-unit">Across all streams</div>
+                    <div class="stat-card-unit">All types</div>
                 </div>
                 <div class="stat-card">
                     <i class="fas fa-tachometer-alt stat-card-icon"></i>
@@ -109,36 +128,13 @@
             </div>
         </section>
 
-        <!-- Quick Navigation Cards -->
-        <section class="content-section">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <i class="fas fa-compass"></i>
-                    Quick Actions
-                </h2>
-            </div>
-            <div class="feature-grid">
-                <a href="monitoring.html" class="feature-card as-link">
-                    <i class="fas fa-video feature-card-icon"></i>
-                    <h3 class="feature-card-title">Go to Live Monitoring</h3>
-                    <p class="feature-card-text">Configure streams, upload videos and view annotated live feeds.</p>
-                </a>
-                <a href="analytics.html" class="feature-card as-link">
-                    <i class="fas fa-chart-line feature-card-icon"></i>
-                    <h3 class="feature-card-title">Open Analytics</h3>
-                    <p class="feature-card-text">View charts for violations, streams and vehicle counts over time.</p>
-                </a>
-            </div>
-        </section>
-
-        <!-- Recent Violations Preview -->
+        <!-- Recent Violations -->
         <section class="content-section">
             <div class="section-header">
                 <h2 class="section-title">
                     <i class="fas fa-list"></i>
-                    Recent Violations (Preview)
+                    Recent Violations
                 </h2>
-                <!-- Full violation history can be explored from the Analytics page -->
             </div>
             <div class="table-container">
                 <table class="data-table">
@@ -162,12 +158,12 @@
             </div>
         </section>
 
-        <!-- Compact Analytics -->
+        <!-- Analytics Charts -->
         <section class="content-section">
             <div class="section-header">
                 <h2 class="section-title">
                     <i class="fas fa-chart-column"></i>
-                    Overview Charts
+                    Analytics & Graphs
                 </h2>
             </div>
             <div class="chart-grid">
@@ -183,27 +179,12 @@
                     </div>
                     <canvas id="streamsVehiclesChart"></canvas>
                 </div>
-            </div>
-        </section>
-
-        <!-- About Section -->
-        <section class="content-section">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <i class="fas fa-info-circle"></i>
-                    About This Dashboard
-                </h2>
-            </div>
-            <div class="info-card">
-                <div class="info-card-header">
-                    <h2 class="info-card-title">Traffic Monitoring System (TMS)</h2>
+                <div class="chart-card">
+                    <div class="chart-card-header">
+                        <h3 class="chart-card-title">Violations Over Time</h3>
+                    </div>
+                    <canvas id="violationsOverTimeChart"></canvas>
                 </div>
-                <p class="info-card-text">
-                    This overview combines real-time statistics from the FastAPI backend with
-                    MongoDB-stored violations to give you a single entry point into the system.
-                    Use the navigation cards above to dive into dedicated pages for monitoring
-                    streams, visual analytics, and violation records.
-                </p>
             </div>
         </section>
     </div>
@@ -224,7 +205,6 @@
             <div class="footer-section">
                 <h4 class="footer-heading"><i class="fas fa-phone"></i> Support</h4>
                 <p class="footer-text">Email: <a href="mailto:support@tms.com">support@tms.com</a></p>
-                <p class="footer-text">Status: <a href="/dashboard">System Dashboard</a></p>
             </div>
         </div>
         <div class="footer-bottom">

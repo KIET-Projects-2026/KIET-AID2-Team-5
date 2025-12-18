@@ -13,6 +13,10 @@ Complete Traffic Monitoring System with Advanced Violation Detection
 - MongoDB Database for Users and Violations
 """
 
+# Load environment variables
+from dotenv import load_dotenv
+load_dotenv()
+
 from fastapi import FastAPI, WebSocket, HTTPException, WebSocketDisconnect, UploadFile, File, Depends, status, Query
 from fastapi.responses import StreamingResponse, FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -58,17 +62,30 @@ app = FastAPI(
 )
 
 # CORS Configuration - Allow both local and production
+# Get allowed origins from environment
+VERCEL_URL = os.getenv("VERCEL_APP_URL", "")
+PRODUCTION_API = os.getenv("PRODUCTION_API_BASE_URL", "")
+
+allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://127.0.0.1:3000",
+]
+
+# Add production URLs only if they're actually set
+if VERCEL_URL and VERCEL_URL.strip():
+    allowed_origins.append(VERCEL_URL)
+if PRODUCTION_API and PRODUCTION_API.strip():
+    allowed_origins.append(PRODUCTION_API)
+
+# Allow all in development (remove in strict production)
+if os.getenv("DEBUG", "false").lower() == "true":
+    allowed_origins.append("*")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:8000",
-        "http://127.0.0.1:8000",
-        "https://trafficmonitoringsystem.onrender.com",
-        "https://*.vercel.app",  # Your Vercel domain
-        "https://*.vercel.app",  # Allow all Vercel preview deployments
-        "*"  # Remove this in production for security
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -82,6 +99,8 @@ frontend_dir = os.path.join(script_dir, "frontend")
 
 if os.path.isdir(frontend_dir):
     app.mount("/frontend", StaticFiles(directory=frontend_dir), name="frontend")
+else:
+    logging.Logger.warning(f"Frontend directory not found at {frontend_dir}")
 
 # ==================== JWT & AUTH CONFIGURATION ====================
 
@@ -317,14 +336,24 @@ class Config:
     ROAD_LINE_MIN_LENGTH = 50  # Minimum length of detected lines in pixels
     
     # Speed Detection
-    SPEED_LIMIT_KMH = 40  # Speed limit for violation detection
-    PIXELS_PER_METER = 15.0  # Adjusted for typical traffic camera perspective
-    SPEED_CALCULATION_FRAMES = 15  # Frames for speed calculation
-    MOVEMENT_THRESHOLD = 3.0  # pixels - threshold for detecting movement
+    # Speed-related values are configurable via environment variables so they
+    # can be tuned per deployment / camera setup without changing code.
+    # Defaults are chosen to work reasonably well for typical demo videos.
+    SPEED_LIMIT_KMH = float(os.getenv("TMS_SPEED_LIMIT_KMH", "30"))  # Speed limit for violation detection
+    PIXELS_PER_METER = float(os.getenv("TMS_PIXELS_PER_METER", "15.0"))  # Pixel-to-meter calibration
+    SPEED_CALCULATION_FRAMES = int(os.getenv("TMS_SPEED_CALC_FRAMES", "15"))  # Frames used for speed calculation
+    # Minimum average per-frame movement (in pixels) required before we trust
+    # the speed estimate. This filters out tiny jitter from the tracker.
+    MOVEMENT_THRESHOLD = float(os.getenv("TMS_SPEED_MOVEMENT_THRESHOLD", "2.0"))
     
     # Distance-based violations
-    SAFE_DISTANCE_METERS = 3.0  # Safe following distance in meters
-    UNSAFE_DISTANCE_PIXELS = SAFE_DISTANCE_METERS * PIXELS_PER_METER  # 45 pixels (3.0 * 15)
+    # Increase the effective unsafe-distance threshold so tailgating
+    # is detected more aggressively.
+    SAFE_DISTANCE_METERS = 5.0  # Safe following distance in meters
+    UNSAFE_DISTANCE_PIXELS = SAFE_DISTANCE_METERS * PIXELS_PER_METER  # 75 pixels (5.0 * 15)
+    
+    # Congestion detection
+    CONGESTION_VEHICLE_THRESHOLD = 25  # Vehicles in frame to consider stream congested
     
     # Red light violation - crossing line position (ratio of frame height)
     RED_LIGHT_LINE_RATIO = 0.5  # Line at 50% of frame height
@@ -849,7 +878,9 @@ class LaneDetector:
                         'type': line_type
                     })
         
-        self.is_detected = len(self.detected_lines) > 0
+        # Mark as detected only if we found lane divider lines (vertical lines)
+        lane_dividers = [line for line in self.detected_lines if line['type'] == 'lane_divider']
+        self.is_detected = len(lane_dividers) >= 2  # Need at least 2 lane dividers
         return self.detected_lines
     
     def get_vehicle_lane(self, bbox):
@@ -946,6 +977,13 @@ class VehicleTrack:
         self.crossed_red_light_line = False
         self.position_at_red_start = None
         
+        # Lane tracking (for lane-change detection)
+        self.current_lane_id = None
+        self.last_lane_id = None
+        # Require a few consecutive frames in a new lane before
+        # confirming a lane-change violation to avoid flicker.
+        self._lane_change_confirm_frames = 0
+        
     def get_center(self, bbox):
         """Get center point of bounding box"""
         x1, y1, x2, y2 = bbox
@@ -963,34 +1001,76 @@ class VehicleTrack:
             self.calculate_speed()
     
     def calculate_speed(self):
-        """Calculate vehicle speed in km/h"""
+        """Calculate vehicle speed in km/h with improved accuracy"""
         if len(self.positions) < 2:
             return
         
-        # Calculate total distance
-        total_distance_pixels = 0
+        # Calculate total distance and average per-frame movement in pixels
+        total_distance_pixels = 0.0
+        max_step_pixels = 0.0
         for i in range(1, len(self.positions)):
             x1, y1 = self.positions[i-1]
             x2, y2 = self.positions[i]
-            distance = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+            distance = float(np.sqrt((x2 - x1)**2 + (y2 - y1)**2))
             total_distance_pixels += distance
+            if distance > max_step_pixels:
+                max_step_pixels = distance
         
-        # Calculate time elapsed
-        time_elapsed_seconds = self.timestamps[-1] - self.timestamps[0]
+        # Calculate time elapsed using the oldest vs newest timestamp in the
+        # window. This automatically adapts to the true FPS of the input.
+        time_elapsed_seconds = float(self.timestamps[-1] - self.timestamps[0])
+
+        # Ignore tracks with essentially no motion to avoid noisy non-zero
+        # speeds caused by tracker jitter.
+        avg_step_pixels = total_distance_pixels / max(1, (len(self.positions) - 1))
+        if avg_step_pixels < Config.MOVEMENT_THRESHOLD or time_elapsed_seconds <= 0:
+            self.speed_kmh = 0.0
+            return
+
+        # Calculate speed with pixel-to-meter conversion
+        distance_meters = total_distance_pixels / Config.PIXELS_PER_METER
+        speed_ms = distance_meters / max(time_elapsed_seconds, 1e-3)
+        # Convert m/s to km/h and apply smoothing to reduce jitter
+        new_speed = float(speed_ms * 3.6)
         
-        if time_elapsed_seconds > 0:
-            distance_meters = total_distance_pixels / Config.PIXELS_PER_METER
-            speed_ms = distance_meters / time_elapsed_seconds
-            self.speed_kmh = speed_ms * 3.6
+        # Apply exponential smoothing for more stable speed readings
+        if self.speed_kmh > 0:
+            self.speed_kmh = 0.7 * self.speed_kmh + 0.3 * new_speed
+        else:
+            self.speed_kmh = new_speed
     
     def check_speed_violation(self):
-        """Check if vehicle exceeds speed limit"""
-        if len(self.positions) >= 5 and self.speed_kmh > 5:  # Minimum 5 km/h to avoid noise
-            if self.speed_kmh > Config.SPEED_LIMIT_KMH:
-                if 'speed' not in self.violations:
-                    self.violations.add('speed')
-                    logger.info(f"SPEED VIOLATION: Vehicle {self.track_id} at {self.speed_kmh:.1f} km/h (limit: {Config.SPEED_LIMIT_KMH} km/h)")
-                    return True
+        """Check if vehicle exceeds speed limit with improved accuracy"""
+        # Be sensitive enough to detect violations on short tracks while
+        # still ignoring tracker jitter and micro-movements.
+        #
+        # We require:
+        #   - at least a few tracked positions for reliable speed calculation
+        #   - a non-trivial elapsed time window (so we don't react on 1–2 frames)
+        #   - computed speed greater than both a small floor and the configured limit.
+        #   - consistent speed readings to avoid false positives from tracker jumps
+        if len(self.positions) < 5:  # Need more samples for reliable speed
+            return False
+
+        # Time window for the current speed estimate
+        time_window = float(self.timestamps[-1] - self.timestamps[0])
+        if time_window < 0.5:  # require at least ~0.5s of motion
+            return False
+
+        # Check if speed exceeds limit with margin for measurement error
+        # Use a threshold of 2 km/h above the limit to reduce false positives
+        speed_threshold = Config.SPEED_LIMIT_KMH + 2.0
+        
+        if self.speed_kmh > 5.0 and self.speed_kmh > speed_threshold:
+            if 'speed' not in self.violations:
+                self.violations.add('speed')
+                logger.info(
+                    f"🚨 SPEED VIOLATION: Vehicle {self.track_id} at {self.speed_kmh:.1f} km/h "
+                    f"(limit: {Config.SPEED_LIMIT_KMH} km/h, threshold: {speed_threshold:.1f} km/h, "
+                    f"window: {time_window:.2f}s, samples: {len(self.positions)})"
+                )
+                return True
+
         return False
     
     def check_red_light_violation(self, signal_state: str, red_light_line_y: int):
@@ -1093,6 +1173,57 @@ class VehicleTrack:
                 return True
         
         return False
+    
+    def update_lane(self, lane_detector: "LaneDetector"):
+        """
+        Update the lane id for this vehicle using the provided LaneDetector.
+        Returns True if a clear lane change is detected.
+        """
+        # Only trust lane information when the detector has actually
+        # found lane lines in the scene; otherwise, skip lane logic.
+        if not getattr(lane_detector, "is_detected", False):
+            return False
+        
+        if not self.bboxes:
+            return False
+        
+        bbox = self.bboxes[-1]
+        lane_id = lane_detector.get_vehicle_lane(bbox)
+        
+        # Skip if lane could not be determined
+        if lane_id is None:
+            return False
+        
+        # First assignment
+        if self.current_lane_id is None:
+            self.current_lane_id = lane_id
+            self.last_lane_id = lane_id
+            return False
+        
+        # Store previous lane before update
+        previous_lane = self.current_lane_id
+        self.current_lane_id = lane_id
+        
+        # Lane change candidate when lane id flips between different lanes
+        # Ignore changes back to None or same lane
+        if previous_lane != self.current_lane_id and previous_lane is not None:
+            self._lane_change_confirm_frames += 1
+        else:
+            # Reset counter if vehicle stays in same lane or returns to previous lane
+            self._lane_change_confirm_frames = 0
+        
+        # Only confirm lane change after consecutive frames in the new lane
+        # to reduce false positives near lane borders.
+        if self._lane_change_confirm_frames >= 3 and 'lane_change' not in self.violations:
+            self.violations.add('lane_change')
+            self.last_lane_id = previous_lane  # Store the lane we changed from
+            logger.info(
+                f"🚨 LANE CHANGE VIOLATION: Vehicle {self.track_id} moved from lane {previous_lane} "
+                f"to {self.current_lane_id} (confirmed over {self._lane_change_confirm_frames} frames)"
+            )
+            return True
+        
+        return False
 
 # ==================== SINGLE STREAM MONITOR ====================
 
@@ -1121,11 +1252,12 @@ class SingleStreamMonitor:
         self.current_signal_state = None  # None means no signal detected
         self.signal_confidence = 0.0
         
-        # Violation counters (simplified: speed, red_light, unsafe_distance)
+        # Violation counters (speed, red_light, unsafe_distance, lane_change)
         self.violation_counts = {
             'speed': 0,
             'red_light': 0,
-            'unsafe_distance': 0
+            'unsafe_distance': 0,
+            'lane_change': 0
         }
         
         # Frame buffering for smooth output
@@ -1135,6 +1267,13 @@ class SingleStreamMonitor:
         # Video writer for output
         self.video_writer = None
         self.output_path = None
+        
+        # Lane detector for this stream (uses frame width for lane layout)
+        self.lane_detector = LaneDetector(Config.INPUT_WIDTH, Config.INPUT_HEIGHT)
+        
+        # Congestion / high-traffic tracking
+        self.current_vehicle_count = 0
+        self.is_congested = False
         
         logger.info(f"Stream Monitor {stream_id} initialized")
     
@@ -1230,15 +1369,28 @@ class SingleStreamMonitor:
         if speeds:
             self.average_speed = sum(speeds) / len(speeds)
         
+        # Update per-stream vehicle count for congestion logic
+        self.current_vehicle_count = len(self.active_tracks)
+        # Mark stream as congested when current vehicles exceed threshold
+        self.is_congested = self.current_vehicle_count >= getattr(Config, "CONGESTION_VEHICLE_THRESHOLD", 25)
+        
         # Cleanup old tracks
         self.cleanup_old_tracks(current_time)
         
         return detections
     
     def check_all_violations(self, frame, current_time):
-        """Check violations: speed, red light crossing, unsafe distance"""
+        """Check violations: speed, red light crossing, unsafe distance, lane change"""
         tracks_list = list(self.active_tracks.values())
-        
+
+        # Always refresh lane lines based on the current frame before checking
+        # any lane-based violations. This keeps the detector in sync with the
+        # latest road view and ensures lane-change violations can be triggered.
+        try:
+            self.lane_detector.detect_lane_lines(frame)
+        except Exception as e:
+            logger.debug(f"Lane detection error on stream {self.stream_id}: {e}")
+
         # Determine crossing line position
         # Use detected zebra crossing position if available, otherwise use frame center
         frame_height = frame.shape[0]
@@ -1270,7 +1422,16 @@ class SingleStreamMonitor:
                 # Reset crossing flag when signal is green
                 track.check_red_light_violation(current_signal, crossing_line_y)
         
-        # 3. UNSAFE DISTANCE VIOLATION - Check pairs only once
+            # 3. LANE CHANGE VIOLATION - use lane detector
+            try:
+                if self.lane_detector is not None and track.update_lane(self.lane_detector):
+                    if 'lane_change' not in track.violation_recorded:
+                        self.record_violation(frame, track, 'lane_change')
+                        track.violation_recorded.add('lane_change')
+            except Exception as e:
+                logger.debug(f"Lane detection error for track {track.track_id}: {e}")
+        
+        # 4. UNSAFE DISTANCE VIOLATION - Check pairs only once
         checked_pairs = set()
         for i, track in enumerate(tracks_list):
             for j in range(i + 1, len(tracks_list)):
@@ -1286,7 +1447,9 @@ class SingleStreamMonitor:
         """Record a violation"""
         self.violation_counts[violation_type] += 1
         
-        # Convert numpy types to native Python types for JSON serialization
+        # Convert numpy types to native Python types for JSON serialization.
+        # NOTE: We use datetime.utcnow() here so that the timestamp aligns
+        # with the UTC-based date filtering in /api/db/violations.
         violation_data = {
             'id': int(len(self.violations) + 1),
             'stream_id': int(self.stream_id),
@@ -1295,7 +1458,7 @@ class SingleStreamMonitor:
             'speed_kmh': float(round(track.speed_kmh, 1)),
             'violation_type': str(violation_type),
             'signal_state': str(self.current_signal_state),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.utcnow().isoformat()
         }
         
         # Add specific violation details
@@ -1571,6 +1734,7 @@ class MultiStreamManager:
         total_violations = []
         total_vehicles = 0
         active_streams = 0
+        congested_streams = 0
         
         stream_stats = []
         violation_summary = defaultdict(int)
@@ -1586,6 +1750,10 @@ class MultiStreamManager:
             for v_type, count in monitor.violation_counts.items():
                 violation_summary[v_type] += count
             
+            # Congestion summary
+            if getattr(monitor, "is_congested", False):
+                congested_streams += 1
+            
             stream_stats.append({
                 'stream_id': stream_id,
                 'processing': monitor.processing,
@@ -1596,6 +1764,8 @@ class MultiStreamManager:
                 'signal_state': monitor.current_signal_state,
                 'stream_url': str(monitor.stream_url) if monitor.stream_url else None,
                 'violation_counts': dict(monitor.violation_counts),
+                'current_vehicle_count': getattr(monitor, "current_vehicle_count", 0),
+                'is_congested': getattr(monitor, "is_congested", False),
                 'output_path': str(monitor.output_path) if monitor.output_path else None
             })
         
@@ -1606,6 +1776,7 @@ class MultiStreamManager:
             'total_violations': len(total_violations),
             'violation_summary': dict(violation_summary),
             'streams': stream_stats,
+            'congested_streams': congested_streams,
             'violations': sorted(total_violations, key=lambda x: x['timestamp'], reverse=True)
         }
 
@@ -1779,6 +1950,7 @@ async def get_violations_from_db(
     violation_type: Optional[str] = None,
     stream_id: Optional[int] = None,
     date_range: Optional[str] = None,
+    specific_date: Optional[str] = None,
     current_user: dict = Depends(get_optional_user)
 ):
     """
@@ -1786,7 +1958,8 @@ async def get_violations_from_db(
     Supports optional filters:
     - violation_type
     - stream_id
-    - date_range: one of ['yesterday', 'last_week', 'last_month', 'last_year']
+    - date_range: one of ['today', 'yesterday', 'last_week', 'last_month', 'last_year']
+    - specific_date: 'YYYY-MM-DD' (overrides date_range if provided)
     """
     if database is None:
         # Fallback to in-memory violations
@@ -1805,21 +1978,32 @@ async def get_violations_from_db(
         query["stream_id"] = stream_id
 
     # Date range filter
-    if date_range:
+    if date_range or specific_date:
         now = datetime.utcnow()
         start_time: Optional[datetime] = None
         end_time: Optional[datetime] = None
 
-        if date_range == "yesterday":
-            today_start = datetime(now.year, now.month, now.day)
-            start_time = today_start - timedelta(days=1)
-            end_time = today_start
-        elif date_range == "last_week":
-            start_time = now - timedelta(days=7)
-        elif date_range == "last_month":
-            start_time = now - timedelta(days=30)
-        elif date_range == "last_year":
-            start_time = now - timedelta(days=365)
+        if specific_date:
+            # Specific calendar day in backend (UTC-based day window)
+            try:
+                target = datetime.strptime(specific_date, "%Y-%m-%d")
+                start_time = datetime(target.year, target.month, target.day)
+                end_time = start_time + timedelta(days=1)
+            except ValueError:
+                logger.warning(f"Invalid specific_date value: {specific_date}")
+        elif date_range:
+            if date_range == "today":
+                start_time = datetime(now.year, now.month, now.day)
+            elif date_range == "yesterday":
+                today_start = datetime(now.year, now.month, now.day)
+                start_time = today_start - timedelta(days=1)
+                end_time = today_start
+            elif date_range == "last_week":
+                start_time = now - timedelta(days=7)
+            elif date_range == "last_month":
+                start_time = now - timedelta(days=30)
+            elif date_range == "last_year":
+                start_time = now - timedelta(days=365)
 
         if start_time:
             if end_time:
@@ -2084,6 +2268,53 @@ async def health_check():
         "timestamp": datetime.now().isoformat()
     }
 
+@app.get("/api/config")
+async def get_frontend_config():
+    """Get frontend configuration from environment variables"""
+    # Detect environment - prioritize explicit ENVIRONMENT variable
+    env_setting = os.getenv("ENVIRONMENT", "").lower()
+    
+    # Check explicit setting first
+    if env_setting == "production":
+        is_production = True
+    elif env_setting == "local" or env_setting == "development":
+        is_production = False
+    else:
+        # Fallback: detect by Render-specific env vars that are ONLY set on Render platform
+        is_production = (
+            os.getenv("RENDER") is not None or
+            os.getenv("RENDER_EXTERNAL_URL") is not None or
+            os.getenv("RENDER_SERVICE_NAME") is not None
+        )
+    
+    # Determine API URLs based on environment
+    if is_production:
+        api_base = os.getenv("PRODUCTION_API_BASE_URL", "https://traffic-monitoring-api.onrender.com")
+        ws_base = os.getenv("PRODUCTION_WS_BASE_URL", "wss://traffic-monitoring-api.onrender.com")
+    else:
+        api_base = os.getenv("LOCAL_API_BASE_URL", "http://localhost:8000")
+        ws_base = os.getenv("LOCAL_WS_BASE_URL", "ws://localhost:8000")
+
+    config = {
+        "api_base_url": api_base,
+        "ws_base_url": ws_base,
+        "environment": "production" if is_production else "development",
+        "debug": os.getenv("DEBUG", "false").lower() == "true",
+        "max_streams": int(os.getenv("MAX_STREAMS", "4")),
+        "poll_intervals": {
+            "stats": int(os.getenv("STATS_POLL_INTERVAL", "2000")),
+            "stream_frame": int(os.getenv("STREAM_FRAME_POLL_INTERVAL", "1000"))
+        },
+        "thresholds": {
+            "speed_limit": int(os.getenv("SPEED_LIMIT", "60")),
+            "min_following_distance": float(os.getenv("MIN_FOLLOWING_DISTANCE", "2.0")),
+            "lane_violation": float(os.getenv("LANE_VIOLATION_THRESHOLD", "0.3"))
+        }
+    }
+    
+    logger.info(f"Config requested - Environment: {config['environment']}, API: {api_base}")
+    return config
+
 @app.get("/api/stats")
 async def get_stats():
     """Get comprehensive statistics from all streams"""
@@ -2208,6 +2439,17 @@ async def get_single_frame(stream_id: int):
     
     monitor = manager.streams[stream_id]
     
+    # Check if stream is processing - if not, return a "stream inactive" placeholder
+    if not monitor.processing:
+        placeholder = np.zeros((720, 1280, 3), dtype=np.uint8)
+        cv2.putText(placeholder, "Stream Inactive", (480, 360),
+                   cv2.FONT_HERSHEY_SIMPLEX, 1.5, (128, 128, 128), 2)
+        ret, buffer = cv2.imencode('.jpg', placeholder)
+        return StreamingResponse(
+            iter([buffer.tobytes()]),
+            media_type="image/jpeg"
+        )
+    
     with monitor.buffer_lock:
         if monitor.current_frame is not None:
             ret, buffer = cv2.imencode('.jpg', monitor.current_frame, 
@@ -2227,6 +2469,26 @@ async def get_single_frame(stream_id: int):
         iter([buffer.tobytes()]),
         media_type="image/jpeg"
     )
+
+@app.get("/api/stream-status/{stream_id}")
+async def get_stream_status(stream_id: int):
+    """Get status of a specific stream (for frontend reconnection)"""
+    if stream_id not in manager.streams:
+        return {
+            "stream_id": stream_id,
+            "processing": False,
+            "exists": False
+        }
+    
+    monitor = manager.streams[stream_id]
+    return {
+        "stream_id": stream_id,
+        "processing": monitor.processing,
+        "exists": True,
+        "fps": round(monitor.fps, 1),
+        "total_vehicles": monitor.total_vehicles,
+        "active_vehicles": len(monitor.active_tracks)
+    }
 
 
 @app.websocket("/ws")
