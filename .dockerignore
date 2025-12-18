@@ -40,3 +40,9 @@ docker-compose.override.yml
 README.md
 LICENSE
 *.md
+
+# Others
+.env
+yolov8n.pt
+__pycache__
+*.pyc
