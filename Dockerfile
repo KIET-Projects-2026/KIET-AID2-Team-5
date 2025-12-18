@@ -1,7 +1,7 @@
 # Use Python 3.10 slim image
 FROM python:3.10-slim
 
-# Install system dependencies
+# Install system dependencies required for OpenCV and video processing
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libgl1 \
@@ -9,41 +9,45 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxext6 \
     libxrender-dev \
+    libgomp1 \
     git \
+    wget \
     && rm -rf /var/lib/apt/lists/*
 
+# Set working directory
 WORKDIR /app
 
-# Create required directories
+# Create required directories for data storage
 RUN mkdir -p data/uploads data/output data/violations data/logs
 
-# Set pip timeout
+# Set pip configuration for faster installs
 ENV PIP_DEFAULT_TIMEOUT=300
+ENV PIP_NO_CACHE_DIR=1
 
-# Copy requirements first for better caching
+# Copy and install Python dependencies first (for better Docker layer caching)
 COPY requirements.txt .
-
-# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy ALL application source files (add missing files)
 COPY backend_complete.py .
-COPY .env .
 
-# Copy frontend files
+# Copy frontend directory
 COPY frontend/ ./frontend/
 
-# Copy YOLOv8 model (if exists locally)
-# If yolov8n.pt is not present, the build will fail; otherwise, it will be copied
-COPY yolov8n.pt .
+# YOLOv8 model will be auto-downloaded by ultralytics on first run
+# Don't copy it - saves space and build time
+
+# Set only essential environment variable
+# ENVIRONMENT will be set by Render's environment variables, not hardcoded
+ENV PYTHONUNBUFFERED=1
 
 # Expose port
 EXPOSE 8000
 
-# Health check
+# Health check for container orchestration
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD python -c "import requests; requests.get('http://localhost:8000/health')"
+  CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
 
-# Run application
-CMD ["uvicorn", "backend_complete:app", "--host", "0.0.0.0", "--port", "8000"]
+# Run application with uvicorn
+CMD ["uvicorn", "backend_complete:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
