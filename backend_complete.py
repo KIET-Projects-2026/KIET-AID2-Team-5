@@ -388,109 +388,128 @@ logger = logging.getLogger(__name__)
 # ==================== YOUTUBE STREAM HANDLER ====================
 
 def get_youtube_stream_url(youtube_url, max_retries=3):
-    """Extract actual stream URL from YouTube video with improved error handling"""
+    """Extract actual stream URL from YouTube video with improved error handling and OpenCV compatibility"""
     import time
     import random
     
     # Modern user agent to avoid bot detection
     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     
+    # Multiple format strategies that work with OpenCV VideoCapture
+    # Priority: single stream formats that OpenCV can read directly
+    format_strategies = [
+        # Strategy 1: Best single stream format (most compatible with OpenCV)
+        'best[protocol=https][ext=mp4]/best[protocol=https]/best[ext=mp4]/best',
+        # Strategy 2: Worst quality but most compatible
+        'worst[protocol=https][ext=mp4]/worst[protocol=https]/worst',
+        # Strategy 3: Medium quality
+        '18/22/37/38',  # YouTube format codes for mp4
+        # Strategy 4: Any available format
+        'best[protocol=https]/best',
+        # Strategy 5: Fallback to any format
+        'best'
+    ]
+    
+    client_strategies = ['android', 'web', 'ios', 'mweb']
+    
     for attempt in range(max_retries):
         try:
             logger.info(f"Extracting YouTube stream from: {youtube_url} (attempt {attempt + 1}/{max_retries})")
             
-            # Enhanced yt-dlp command with better options
-            cmd = [
-                'yt-dlp',
-                '--no-warnings',  # Reduce noise in logs
-                '--no-check-certificate',  # Avoid SSL issues
-                '--user-agent', user_agent,  # Modern user agent
-                '--extractor-args', 'youtube:player_client=android',  # Use Android client (less bot detection)
-                '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # Better format selection
-                '--no-playlist',  # Only extract single video
-                '--socket-timeout', '30',  # Connection timeout
-                '--retries', '3',  # Retry failed requests
-                '--fragment-retries', '3',  # Retry fragment downloads
-                '--skip-unavailable-fragments',  # Skip unavailable parts
-                '-g',  # Get URL only
-                youtube_url
-            ]
+            # Try each format strategy
+            for format_idx, format_str in enumerate(format_strategies):
+                # Try different client types
+                for client_idx, client_type in enumerate(client_strategies):
+                    try:
+                        logger.info(f"Trying format strategy {format_idx + 1}/{len(format_strategies)}, client: {client_type}")
+                        
+                        cmd = [
+                            'yt-dlp',
+                            '--no-warnings',
+                            '--no-check-certificate',
+                            '--user-agent', user_agent,
+                            '--extractor-args', f'youtube:player_client={client_type}',
+                            '--format', format_str,
+                            '--no-playlist',
+                            '--socket-timeout', '30',
+                            '--retries', '2',
+                            '--fragment-retries', '2',
+                            '--skip-unavailable-fragments',
+                            '-g',  # Get URL only
+                            youtube_url
+                        ]
+                        
+                        result = subprocess.run(
+                            cmd,
+                            capture_output=True,
+                            text=True,
+                            timeout=90,  # Increased timeout for slower connections
+                            env={**os.environ, 'PYTHONUNBUFFERED': '1'}
+                        )
+                        
+                        if result.returncode == 0:
+                            # yt-dlp with -g can return multiple URLs (video+audio), take first one
+                            output_lines = result.stdout.strip().split('\n')
+                            stream_url = output_lines[0].strip() if output_lines else None
+                            
+                            if stream_url and stream_url.startswith('http'):
+                                # Verify it's a single URL (not DASH format with multiple URLs)
+                                if len(output_lines) == 1 or 'googlevideo.com' in stream_url:
+                                    logger.info(f"✅ Stream URL extracted successfully (format {format_idx + 1}, client {client_type}): {stream_url[:100]}...")
+                                    return stream_url
+                                else:
+                                    logger.warning(f"Multiple URLs returned (DASH format), trying next strategy...")
+                                    continue
+                            else:
+                                logger.warning(f"Invalid stream URL received: {stream_url[:100] if stream_url else 'empty'}")
+                        
+                        # Check for rate limiting
+                        stderr = result.stderr.lower()
+                        if '429' in stderr or 'too many requests' in stderr:
+                            wait_time = (attempt + 1) * 5 + random.uniform(1, 3)
+                            logger.warning(f"Rate limited by YouTube. Waiting {wait_time:.1f}s...")
+                            time.sleep(wait_time)
+                            break  # Break inner loops and retry with next attempt
+                        
+                    except subprocess.TimeoutExpired:
+                        logger.warning(f"Timeout for format {format_idx + 1}, client {client_type}, trying next...")
+                        continue
+                    except Exception as e:
+                        logger.warning(f"Error with format {format_idx + 1}, client {client_type}: {e}")
+                        continue
+                
+                # If we got rate limited, break format loop too
+                if '429' in stderr or 'too many requests' in stderr:
+                    break
             
-            result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=60,  # Increased timeout
-                env={**os.environ, 'PYTHONUNBUFFERED': '1'}
-            )
-            
-            if result.returncode == 0:
-                stream_url = result.stdout.strip()
-                if stream_url and stream_url.startswith('http'):
-                    logger.info(f"Stream URL extracted successfully: {stream_url[:100]}...")
-                    return stream_url
-                else:
-                    logger.warning(f"Invalid stream URL received: {stream_url[:100] if stream_url else 'empty'}")
-            
-            # Check for specific errors
-            stderr = result.stderr.lower()
-            if '429' in stderr or 'too many requests' in stderr:
-                wait_time = (attempt + 1) * 5 + random.uniform(1, 3)  # Exponential backoff with jitter
-                logger.warning(f"Rate limited by YouTube. Waiting {wait_time:.1f}s before retry...")
-                if attempt < max_retries - 1:
-                    time.sleep(wait_time)
-                    continue
-            elif 'bot' in stderr or 'sign in' in stderr:
-                # Try alternative method with different client
-                logger.info("Bot detection detected, trying alternative extraction method...")
-                cmd_alt = [
-                    'yt-dlp',
-                    '--no-warnings',
-                    '--user-agent', user_agent,
-                    '--extractor-args', 'youtube:player_client=web',  # Try web client
-                    '--format', 'best[ext=mp4]/best',
-                    '--no-playlist',
-                    '-g',
-                    youtube_url
-                ]
-                result_alt = subprocess.run(
-                    cmd_alt,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    env={**os.environ, 'PYTHONUNBUFFERED': '1'}
-                )
-                if result_alt.returncode == 0:
-                    stream_url = result_alt.stdout.strip()
-                    if stream_url and stream_url.startswith('http'):
-                        logger.info(f"Stream URL extracted with alternative method: {stream_url[:100]}...")
-                        return stream_url
-            
-            logger.error(f"yt-dlp error (attempt {attempt + 1}): {result.stderr[:500]}")
+            # If all format strategies failed, log error
+            logger.error(f"All format strategies failed (attempt {attempt + 1}/{max_retries})")
+            if result and result.stderr:
+                logger.error(f"Last error: {result.stderr[:500]}")
             
             # Wait before retry (except on last attempt)
             if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 2 + random.uniform(0.5, 1.5)
+                wait_time = (attempt + 1) * 3 + random.uniform(1, 2)
                 logger.info(f"Retrying in {wait_time:.1f}s...")
                 time.sleep(wait_time)
                 
         except FileNotFoundError:
-            logger.error("yt-dlp not found! Please install it: pip install yt-dlp")
+            logger.error("❌ yt-dlp not found! Please install it: pip install yt-dlp")
             return None
         except subprocess.TimeoutExpired:
-            logger.error(f"YouTube stream extraction timed out (attempt {attempt + 1})")
+            logger.error(f"❌ YouTube stream extraction timed out (attempt {attempt + 1})")
             if attempt < max_retries - 1:
                 time.sleep(5)
                 continue
         except Exception as e:
-            logger.error(f"Failed to get YouTube stream (attempt {attempt + 1}): {e}")
+            logger.error(f"❌ Failed to get YouTube stream (attempt {attempt + 1}): {e}")
             if attempt < max_retries - 1:
                 time.sleep(3)
                 continue
             import traceback
             traceback.print_exc()
     
-    logger.error(f"Failed to extract YouTube stream after {max_retries} attempts")
+    logger.error(f"❌ Failed to extract YouTube stream after {max_retries} attempts with all strategies")
     return None
 
 # ==================== TRAFFIC LIGHT DETECTION ====================
@@ -1747,10 +1766,29 @@ class MultiStreamManager:
     def _process_stream(self, stream_id: int, stream_url: str):
         """Process video stream"""
         monitor = self.streams[stream_id]
-        cap = cv2.VideoCapture(stream_url)
         
-        # Set buffer size for better performance
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+        # Check if it's a YouTube URL (already extracted)
+        is_youtube_url = isinstance(stream_url, str) and ('youtube.com' in stream_url or 'youtu.be' in stream_url or 'googlevideo.com' in stream_url)
+        
+        # For YouTube URLs, add additional OpenCV options for better compatibility
+        if is_youtube_url:
+            logger.info(f"Stream {stream_id}: Opening YouTube stream with enhanced settings...")
+            # Use OpenCV backend that works better with HTTP streams
+            cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+        else:
+            cap = cv2.VideoCapture(stream_url)
+        
+        # Set buffer size for better performance (smaller for live streams)
+        if is_youtube_url:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Smaller buffer for live streams
+        else:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+        
+        # Additional settings for YouTube streams
+        if is_youtube_url:
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'H264'))
+            # Set timeout for frame reading
+            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 30000)  # 30 second timeout
         
         # Set FPS if it's a file
         if isinstance(stream_url, str) and os.path.isfile(stream_url):
@@ -1764,19 +1802,51 @@ class MultiStreamManager:
         
         frame_count = 0
         start_time = time.time()
+        consecutive_failures = 0
+        max_consecutive_failures = 30  # Allow some failures for buffering
         
+        # Try to open the stream with retries for YouTube URLs
         if not cap.isOpened():
-            logger.error(f"Stream {stream_id}: Failed to open {stream_url}")
-            monitor.processing = False
-            return
+            if is_youtube_url:
+                logger.warning(f"Stream {stream_id}: Initial open failed, retrying YouTube stream...")
+                time.sleep(2)  # Wait a bit for stream to be ready
+                cap.release()
+                cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 30000)
+            
+            if not cap.isOpened():
+                logger.error(f"Stream {stream_id}: Failed to open {stream_url[:100] if isinstance(stream_url, str) else stream_url}")
+                monitor.processing = False
+                return
         
-        logger.info(f"Stream {stream_id}: Processing started")
+        logger.info(f"Stream {stream_id}: Processing started (YouTube: {is_youtube_url})")
         
         while monitor.processing:
             ret, frame = cap.read()
             if not ret:
-                logger.warning(f"Stream {stream_id}: End of video or failed to read frame")
-                break
+                consecutive_failures += 1
+                if consecutive_failures >= max_consecutive_failures:
+                    logger.error(f"Stream {stream_id}: Too many consecutive frame read failures ({consecutive_failures}), stopping stream")
+                    break
+                
+                # For YouTube streams, try to recover
+                if is_youtube_url and consecutive_failures % 10 == 0:
+                    logger.warning(f"Stream {stream_id}: Frame read failed ({consecutive_failures}/{max_consecutive_failures}), attempting recovery...")
+                    # Try to reopen the stream
+                    cap.release()
+                    time.sleep(1)
+                    cap = cv2.VideoCapture(stream_url, cv2.CAP_FFMPEG)
+                    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                    if not cap.isOpened():
+                        logger.error(f"Stream {stream_id}: Failed to reopen stream after failure")
+                        break
+                
+                time.sleep(0.1)  # Small delay before retry
+                continue
+            
+            # Reset failure counter on success
+            consecutive_failures = 0
             
             frame_count += 1
             

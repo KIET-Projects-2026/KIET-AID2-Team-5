@@ -13,21 +13,34 @@
             <div class="navbar-brand">
                 <img src="/frontend/Logo.png" alt="TrafficFlow Logo" class="brand-logo">
             </div>
-            <div class="navbar-menu">
-                <a class="nav-link active" href="#home">
+
+            <button class="navbar-toggle" id="mobile-menu-btn" aria-label="Toggle navigation">
+                <i class="fas fa-bars"></i>
+            </button>
+
+            <div class="navbar-menu" id="navbar-menu">
+                <a class="nav-link active" href="#home" onclick="closeMobileMenu()">
                     <i class="fas fa-home"></i> Home
                 </a>
-                <a class="nav-link" href="#about">
+                <a class="nav-link" href="#about" onclick="closeMobileMenu()">
                     <i class="fas fa-info-circle"></i> About
                 </a>
-                <a class="nav-link" href="#project">
+                <a class="nav-link" href="#project" onclick="closeMobileMenu()">
                     <i class="fas fa-project-diagram"></i> Project
                 </a>
-                <a class="nav-link" href="#contact">
+                <a class="nav-link" href="#contact" onclick="closeMobileMenu()">
                     <i class="fas fa-envelope"></i> Contact
                 </a>
+                
+                <div class="mobile-auth-btn">
+                    <button class="login-btn full-width" onclick="showAuthModal(); closeMobileMenu()">
+                        <i class="fas fa-arrow-right-to-bracket"></i>
+                        <span>Get Started</span>
+                    </button>
+                </div>
             </div>
-            <div class="navbar-actions">
+
+            <div class="navbar-actions desktop-only">
                 <button class="login-btn" onclick="showAuthModal()">
                     <i class="fas fa-arrow-right-to-bracket"></i>
                     <span>Get Started</span>
@@ -53,7 +66,7 @@
                 </p>
 
                 <div class="hero-actions">
-                    <button class="btn btn-large" onclick="openSignup()">
+                    <button class="btn btn-large btn-primary" onclick="openSignup()">
                         <i class="fas fa-user-plus"></i> Get Started – Sign Up
                     </button>
                     <button class="btn btn-secondary btn-large" onclick="openLogin()">

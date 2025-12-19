@@ -3,29 +3,44 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TMS - Monitoring Overview Dashboard</title>
+    <title>TMS - Live Operations</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="/frontend/styles.css">
 </head>
 <body class="dashboard-body">
-    <!-- Navigation Bar -->
     <nav class="navbar navbar-dashboard">
         <div class="navbar-container">
             <div class="navbar-brand">
                 <img src="/frontend/Logo.png" alt="TMS Logo" class="brand-logo">
             </div>
-            <div class="navbar-menu">
-                <a class="nav-link" href="analytics.html">
+
+            <button class="navbar-toggle" id="mobile-menu-btn" aria-label="Toggle navigation">
+                <i class="fas fa-bars"></i>
+            </button>
+
+            <div class="navbar-menu" id="navbar-menu">
+                <a class="nav-link" href="analytics.html" onclick="closeMobileMenu()">
                     <i class="fas fa-chart-line"></i> Analytics
                 </a>
-                <a class="nav-link" href="monitoring.html">
+                <a class="nav-link" href="monitoring.html" onclick="closeMobileMenu()">
                     <i class="fas fa-video"></i> Monitoring
                 </a>
-                <a class="nav-link active" href="dashboard.html">
+                <a class="nav-link active" href="dashboard.html" onclick="closeMobileMenu()">
                     <i class="fas fa-gauge"></i> Overview
                 </a>
+
+                <div class="mobile-auth-btn">
+                    <div class="mobile-user-info">
+                        <i class="fas fa-user-circle"></i>
+                        <span id="mobileUserName">Logged in User</span>
+                    </div>
+                    <button class="btn btn-danger full-width" onclick="logout()">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </button>
+                </div>
             </div>
-            <div class="navbar-actions">
+
+            <div class="navbar-actions desktop-only">
                 <button class="notification-btn">
                     <i class="fas fa-bell"></i>
                     <span class="notification-badge" id="notificationBadge">0</span>
@@ -41,16 +56,6 @@
                         <i class="fas fa-chevron-down dropdown-arrow"></i>
                     </div>
                     <div class="dropdown-menu">
-                        <div class="dropdown-item" onclick="window.location.href='analytics.html'">
-                            <i class="fas fa-chart-line"></i>
-                            <span>Analytics</span>
-                        </div>
-                        <div class="dropdown-item" onclick="window.location.href='monitoring.html'">
-                            <i class="fas fa-video"></i>
-                            <span>Monitoring</span>
-                        </div>
-                        <!-- Violations are now reviewed from this Overview dashboard -->
-                        <div class="dropdown-divider"></div>
                         <button class="dropdown-item dropdown-item-danger" onclick="logout()">
                             <i class="fas fa-sign-out-alt"></i>
                             <span>Logout</span>
@@ -61,154 +66,90 @@
         </div>
     </nav>
 
-    <!-- Main Content -->
     <div class="dashboard-main">
-        <div class="page-header">
+        <!-- <div class="page-header">
             <h1 class="page-title">
-                <i class="fas fa-gauge"></i>
-                Monitoring Overview
+                <i class="fas fa-tower-control"></i>
+                Live Operations Center
             </h1>
             <p class="page-subtitle">
-                High-level summary of live streams, violations and system status.
+                Real-time operational status, active stream health, and immediate violation alerts.
             </p>
-        </div>
+        </div> -->
 
-        <!-- Overview Stats -->
         <section class="content-section">
             <div class="section-header">
                 <h2 class="section-title">
-                    <i class="fas fa-circle-info"></i>
-                    System Snapshot
+                    <i class="fas fa-heart-pulse"></i>
+                    Current Status
                 </h2>
             </div>
             <div class="stats-grid">
                 <div class="stat-card">
                     <i class="fas fa-video stat-card-icon"></i>
-                    <div class="stat-card-label">Active Streams</div>
+                    <div class="stat-card-label">Online Streams</div>
                     <div class="stat-card-value" id="activeStreams">0</div>
-                    <div class="stat-card-unit">Currently processing</div>
+                    <div class="stat-card-unit">Processing Live</div>
                 </div>
                 <div class="stat-card">
-                    <i class="fas fa-car stat-card-icon"></i>
-                    <div class="stat-card-label">Total Vehicles</div>
+                    <i class="fas fa-car-on stat-card-icon"></i>
+                    <div class="stat-card-label">Today's Traffic</div>
                     <div class="stat-card-value" id="totalVehicles">0</div>
-                    <div class="stat-card-unit">Detected today</div>
+                    <div class="stat-card-unit">Vehicles Detected</div>
                 </div>
                 <div class="stat-card">
-                    <i class="fas fa-exclamation-triangle stat-card-icon"></i>
-                    <div class="stat-card-label">Total Violations</div>
+                    <i class="fas fa-triangle-exclamation stat-card-icon"></i>
+                    <div class="stat-card-label">Today's Violations</div>
                     <div class="stat-card-value" id="totalViolations">0</div>
-                    <div class="stat-card-unit">Across all streams</div>
+                    <div class="stat-card-unit">Alerts Generated</div>
                 </div>
                 <div class="stat-card">
-                    <i class="fas fa-tachometer-alt stat-card-icon"></i>
-                    <div class="stat-card-label">Speed Violations</div>
+                    <i class="fas fa-gauge-simple-high stat-card-icon"></i>
+                    <div class="stat-card-label">Critical Speeding</div>
                     <div class="stat-card-value" id="speedViolations">0</div>
-                    <div class="stat-card-unit">Over limit</div>
+                    <div class="stat-card-unit">Major Incidents</div>
                 </div>
             </div>
         </section>
 
-        <!-- Quick Navigation Cards -->
         <section class="content-section">
             <div class="section-header">
                 <h2 class="section-title">
-                    <i class="fas fa-compass"></i>
-                    Quick Actions
+                    <i class="fas fa-satellite-dish"></i>
+                    Live Alert Feed
                 </h2>
-            </div>
-            <div class="feature-grid">
-                <a href="monitoring.html" class="feature-card as-link">
-                    <i class="fas fa-video feature-card-icon"></i>
-                    <h3 class="feature-card-title">Go to Live Monitoring</h3>
-                    <p class="feature-card-text">Configure streams, upload videos and view annotated live feeds.</p>
-                </a>
-                <a href="analytics.html" class="feature-card as-link">
-                    <i class="fas fa-chart-line feature-card-icon"></i>
-                    <h3 class="feature-card-title">Open Analytics</h3>
-                    <p class="feature-card-text">View charts for violations, streams and vehicle counts over time.</p>
-                </a>
-            </div>
-        </section>
-
-        <!-- Recent Violations Preview -->
-        <section class="content-section">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <i class="fas fa-list"></i>
-                    Recent Violations (Preview)
-                </h2>
-                <!-- Full violation history can be explored from the Analytics page -->
             </div>
             <div class="table-container">
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Stream</th>
-                            <th>Violation Type</th>
-                            <th>Vehicle Speed</th>
-                            <th>Time</th>
+                            <th>Source Stream</th>
+                            <th>Alert Type</th>
+                            <th>Detected Speed</th>
+                            <th>Timestamp</th>
                         </tr>
                     </thead>
                     <tbody id="violationsTableBody">
                         <tr>
                             <td colspan="4" class="table-empty-state">
-                                <i class="fas fa-inbox"></i>
-                                <p>No violations detected</p>
+                                <i class="fas fa-spinner fa-spin"></i>
+                                <p>Connecting to live feed...</p>
                             </td>
                         </tr>
                     </tbody>
                 </table>
-            </div>
-        </section>
-
-        <!-- Compact Analytics -->
-        <section class="content-section">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <i class="fas fa-chart-column"></i>
-                    Overview Charts
-                </h2>
-            </div>
-            <div class="chart-grid">
-                <div class="chart-card">
-                    <div class="chart-card-header">
-                        <h3 class="chart-card-title">Violations by Type</h3>
+                <div class="table-footer" id="tablePagination" style="display: none;">
+                    <div class="pagination-info">
+                        Showing <span id="pageStart">0</span>-<span id="pageEnd">0</span> of <span id="totalRows">0</span>
                     </div>
-                    <canvas id="violationsByTypeChart"></canvas>
-                </div>
-                <div class="chart-card">
-                    <div class="chart-card-header">
-                        <h3 class="chart-card-title">Streams & Vehicles</h3>
-                    </div>
-                    <canvas id="streamsVehiclesChart"></canvas>
+                    <div class="pagination-controls" id="paginationControls">
+                        </div>
                 </div>
             </div>
         </section>
 
-        <!-- About Section -->
-        <section class="content-section">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <i class="fas fa-info-circle"></i>
-                    About This Dashboard
-                </h2>
-            </div>
-            <div class="info-card">
-                <div class="info-card-header">
-                    <h2 class="info-card-title">Traffic Monitoring System (TMS)</h2>
-                </div>
-                <p class="info-card-text">
-                    This overview combines real-time statistics from the FastAPI backend with
-                    MongoDB-stored violations to give you a single entry point into the system.
-                    Use the navigation cards above to dive into dedicated pages for monitoring
-                    streams, visual analytics, and violation records.
-                </p>
-            </div>
-        </section>
     </div>
 
-    <!-- Footer -->
     <footer class="footer">
         <div class="footer-content">
             <div class="footer-section">
@@ -219,17 +160,15 @@
                 <h4 class="footer-heading"><i class="fas fa-cogs"></i> Technology</h4>
                 <p class="footer-text">✓ YOLOv8 Vehicle Detection</p>
                 <p class="footer-text">✓ Real-time Processing</p>
-                <p class="footer-text">✓ Multi-stream Support</p>
             </div>
             <div class="footer-section">
                 <h4 class="footer-heading"><i class="fas fa-phone"></i> Support</h4>
                 <p class="footer-text">Email: <a href="mailto:support@tms.com">support@tms.com</a></p>
-                <p class="footer-text">Status: <a href="/dashboard">System Dashboard</a></p>
+                <p class="footer-text">Status: <a href="/dashboard">System Online</a></p>
             </div>
         </div>
         <div class="footer-bottom">
             <p>&copy; 2024 TMS - Traffic Monitoring System. All rights reserved.</p>
-            <p>Built with <i class="fas fa-heart" style="color: #ef4444;"></i> for safer traffic</p>
         </div>
     </footer>
 

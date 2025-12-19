@@ -281,17 +281,39 @@ function updateAuthUI() {
     const userDropdown = document.getElementById('userDropdown');
 
     if (currentUser && authToken) {
+        // Desktop: Show user dropdown
         if (userDropdown) userDropdown.classList.remove('hidden');
 
+        // Desktop: Update Avatar
         if (currentUser.username) {
             const initials = currentUser.username.substring(0, 2).toUpperCase();
             const avatarEl = document.getElementById('userAvatar');
             if (avatarEl) avatarEl.textContent = initials;
         }
+        
+        // Determine display name
+        const displayName = currentUser.full_name || currentUser.username || 'User';
+
+        // Desktop: Update Name and Email
         const nameEl = document.getElementById('userDisplayName');
         const emailEl = document.getElementById('userDisplayEmail');
-        if (nameEl) nameEl.textContent = currentUser.full_name || currentUser.username || 'User';
+        if (nameEl) nameEl.textContent = displayName;
         if (emailEl) emailEl.textContent = currentUser.email || '';
+
+        // Mobile: Update Name in Hamburger Menu
+        const mobileNameEl = document.getElementById('mobileUserName');
+        if (mobileNameEl) {
+            mobileNameEl.textContent = displayName;
+        }
+    } else {
+        // User not logged in - hide desktop dropdown
+        if (userDropdown) userDropdown.classList.add('hidden');
+        
+        // Reset mobile menu to default
+        const mobileNameEl = document.getElementById('mobileUserName');
+        if (mobileNameEl) {
+            mobileNameEl.textContent = 'Guest User';
+        }
     }
 }
 
@@ -491,14 +513,22 @@ function updateChartsFromStats(data) {
 function startStream(index) {
     const urlInput = document.getElementById('streamUrl' + index);
     if (!urlInput) return; // Not on monitoring page
-    const url = urlInput.value;
+    const url = urlInput.value.trim();
     if (!url) {
         showToast('Please enter a stream URL', 'error');
         return;
     }
 
-    console.log(`Starting stream ${index} with URL:`, url);
-    showToast(`Starting stream ${index + 1}...`, 'info');
+    // Check if it's a YouTube URL
+    const isYouTube = url.includes('youtube.com') || url.includes('youtu.be');
+    
+    console.log(`Starting stream ${index} with URL:`, url, isYouTube ? '(YouTube)' : '');
+    
+    if (isYouTube) {
+        showToast(`Processing YouTube URL for stream ${index + 1}... This may take a moment.`, 'info');
+    } else {
+        showToast(`Starting stream ${index + 1}...`, 'info');
+    }
 
     fetch(`${API_BASE_URL}/api/start-stream/${index}?stream_url=${encodeURIComponent(url)}`, {
         method: 'POST',
@@ -506,18 +536,46 @@ function startStream(index) {
     })
         .then(async r => {
             const data = await r.json();
-            if (!r.ok) throw new Error(data.detail || `Server returned ${r.status}`);
+            if (!r.ok) {
+                // Provide more helpful error messages for YouTube URLs
+                let errorMsg = data.detail || `Server returned ${r.status}`;
+                if (isYouTube && (errorMsg.includes('extract') || errorMsg.includes('yt-dlp') || errorMsg.includes('Failed'))) {
+                    errorMsg = 'YouTube URL processing failed. Please check:\n1. The URL is valid and accessible\n2. The video is not private/restricted\n3. Try a different YouTube video';
+                }
+                throw new Error(errorMsg);
+            }
             return data;
         })
-        .then(() => {
-            console.log(`Stream ${index} started successfully`);
-            showToast(`Stream ${index + 1} started successfully!`, 'success');
+        .then((data) => {
+            console.log(`Stream ${index} started successfully`, data);
+            if (isYouTube) {
+                showToast(`YouTube stream ${index + 1} started successfully! Processing video...`, 'success');
+            } else {
+                showToast(`Stream ${index + 1} started successfully!`, 'success');
+            }
             updateStreamStatus(index);
-            pollStreamFrame(index);
+            
+            // Show loading state immediately
+            const placeholder = document.getElementById('placeholder' + index);
+            if (placeholder) {
+                placeholder.style.display = 'flex';
+                placeholder.innerHTML = '<i class="fas fa-spinner fa-spin"></i><p>Processing video stream...</p>';
+            }
+            
+            // Give YouTube streams more time before polling (extraction + processing takes time)
+            // Regular streams: 500ms, YouTube: 5 seconds (allows time for extraction + initial frames)
+            setTimeout(() => {
+                console.log(`Starting frame polling for stream ${index}${isYouTube ? ' (YouTube)' : ''}`);
+                pollStreamFrame(index);
+            }, isYouTube ? 5000 : 500);
         })
         .catch(err => {
             console.error(`Failed to start stream ${index}:`, err);
-            showToast(`Failed to start stream: ${err.message}`, 'error');
+            let errorMsg = err.message;
+            if (isYouTube) {
+                errorMsg = `YouTube stream failed: ${errorMsg}`;
+            }
+            showToast(errorMsg, 'error');
         });
 }
 
@@ -585,16 +643,23 @@ function pollStreamFrame(index) {
     let consecutiveErrors = 0;
     const maxConsecutiveErrors = 5;
     
+    // Check if this is a YouTube stream by checking the URL input
+    const urlInput = document.getElementById('streamUrl' + index);
+    const isYouTubeStream = urlInput && (urlInput.value.includes('youtube.com') || urlInput.value.includes('youtu.be'));
+    
     streamPollIntervals[index] = setInterval(async () => {
         try {
             // Add cache-busting timestamp to prevent browser caching
             const timestamp = new Date().getTime();
             const frameUrl = `${API_BASE_URL}/stream/${index}/frame?t=${timestamp}`;
             
+            // YouTube streams may need longer timeout due to processing overhead
+            const timeoutDuration = isYouTubeStream ? 10000 : 5000; // 10s for YouTube, 5s for others
+            
             const response = await fetch(frameUrl, {
                 headers: getAuthHeaders(),
                 cache: 'no-store',
-                signal: AbortSignal.timeout(5000) // 5 second timeout
+                signal: AbortSignal.timeout(timeoutDuration)
             });
 
             if (response.ok && response.headers.get('content-type')?.includes('image')) {
@@ -640,7 +705,14 @@ function pollStreamFrame(index) {
                         }
                     } else {
                         // Stream is still processing, just waiting for frames
-                        placeholder.innerHTML = '<i class="fas fa-spinner fa-spin"></i><p>Loading frames...</p>';
+                        // Show different message for YouTube streams
+                        const urlInput = document.getElementById('streamUrl' + index);
+                        const isYouTube = urlInput && (urlInput.value.includes('youtube.com') || urlInput.value.includes('youtu.be'));
+                        if (isYouTube) {
+                            placeholder.innerHTML = '<i class="fas fa-spinner fa-spin"></i><p>Processing YouTube video... This may take a moment.</p>';
+                        } else {
+                            placeholder.innerHTML = '<i class="fas fa-spinner fa-spin"></i><p>Loading frames...</p>';
+                        }
                     }
                 }
             }
@@ -1502,6 +1574,145 @@ function initDashboardPages() {
     });
 }
 
+/* ============================================
+   STREAM SWAP LOGIC - FULL IMPLEMENTATION
+   ============================================ */
+
+let currentMainStreamIndex = 2; // Stream 3 is main by default
+
+/**
+ * Swap a small stream with the main stream
+ * Physically moves DOM elements (content, videos, uploads, everything)
+ */
+function swapToMainScreen(smallStreamIndex) {
+  if (smallStreamIndex === currentMainStreamIndex) return;
+  
+  const smallCard = document.querySelector(`.stream-card-wrapper.small[data-stream="${smallStreamIndex}"]`);
+  const mainCard = document.querySelector('.stream-card-wrapper.main-stream');
+  
+  if (!smallCard || !mainCard) return;
+  
+  const oldMainIndex = parseInt(mainCard.dataset.stream);
+
+  // Swap the actual content (DOM elements)
+  const smallContent = smallCard.querySelector('.stream-card-content').innerHTML;
+  const mainContent = mainCard.querySelector('.stream-card-content').innerHTML;
+
+  smallCard.querySelector('.stream-card-content').innerHTML = mainContent;
+  mainCard.querySelector('.stream-card-content').innerHTML = smallContent;
+
+  // Swap data-stream attributes
+  smallCard.dataset.stream = String(oldMainIndex);
+  mainCard.dataset.stream = String(smallStreamIndex);
+
+  currentMainStreamIndex = smallStreamIndex;
+
+  // Re-init uploads after DOM swap
+  for (let i = 0; i < 4; i++) {
+    setupFileUploadForStream(i);
+  }
+
+  // Ensure main card visual state
+  document.querySelectorAll('.stream-card-wrapper.main-stream')
+    .forEach(c => c.classList.remove('main-stream'));
+  mainCard.classList.add('main-stream');
+
+  // >>> AUTO REFRESH PART <<<
+  // 1. Refresh stats panel and charts
+  if (typeof updateSystemStats === 'function') {
+    updateSystemStats();
+  }
+
+  // 2. Restart frame polling for all streams so the new main one
+  //    starts getting fresh frames immediately
+  if (typeof pollStreamFrame === 'function') {
+    for (let i = 0; i < 4; i++) {
+      // Only poll if that stream is currently active
+      const statusEl = document.getElementById(`status${i}`);
+      if (statusEl && statusEl.textContent.trim().toLowerCase() === 'active') {
+        pollStreamFrame(i);
+      }
+    }
+  }
+
+  console.log(`Swapped Stream ${smallStreamIndex} to main and refreshed streams.`);
+}
+
+
+/**
+ * Enhanced file upload setup - call this after DOM swaps
+ */
+function setupFileUploadForStream(streamIndex) {
+  const fileInput = document.getElementById(`videoFile${streamIndex}`);
+  const uploadLabel = fileInput ? document.querySelector(`label[for="videoFile${streamIndex}"]`) : null;
+  const selectedFile = document.getElementById(`selectedFile${streamIndex}`);
+  const fileName = document.getElementById(`fileName${streamIndex}`);
+  
+  if (!fileInput || !uploadLabel || !selectedFile || !fileName) return;
+  
+  const uploadBox = uploadLabel.querySelector('.upload-box');
+  
+  // Remove old listeners
+  const newFileInput = fileInput.cloneNode(true);
+  fileInput.parentNode.replaceChild(newFileInput, fileInput);
+  
+  // Reattach listeners
+  const freshInput = document.getElementById(`videoFile${streamIndex}`);
+  
+  freshInput.addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (file) {
+      fileName.textContent = file.name;
+      selectedFile.style.display = 'flex';
+    } else {
+      selectedFile.style.display = 'none';
+    }
+  });
+  
+  uploadLabel.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    if (uploadBox) {
+      uploadBox.style.borderColor = 'var(--primary-green)';
+      uploadBox.style.background = 'rgba(124, 179, 66, 0.08)';
+    }
+  });
+  
+  uploadLabel.addEventListener('dragleave', function(e) {
+    if (uploadBox) {
+      uploadBox.style.borderColor = 'var(--light-gray)';
+      uploadBox.style.background = 'rgba(0, 0, 0, 0.02)';
+    }
+  });
+  
+  uploadLabel.addEventListener('drop', function(e) {
+    e.preventDefault();
+    if (uploadBox) {
+      uploadBox.style.borderColor = 'var(--light-gray)';
+      uploadBox.style.background = 'rgba(0, 0, 0, 0.02)';
+    }
+    if (e.dataTransfer.files.length > 0) {
+      freshInput.files = e.dataTransfer.files;
+      freshInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+}
+
+/**
+ * Original clearStreamFile - still works with new layout
+ */
+function clearStreamFileMonitoring(index) {
+  const input = document.getElementById(`videoFile${index}`);
+  const selectedFile = document.getElementById(`selectedFile${index}`);
+  if (input) input.value = '';
+  if (selectedFile) selectedFile.style.display = 'none';
+}
+
+// Call this in your existing init code:
+// for (let i = 0; i < 4; i++) {
+//   setupFileUploadForStream(i);
+// }
+
+
 // Main entry
 async function initializeApp() {
     // Load configuration first
@@ -1529,4 +1740,506 @@ if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', initializeApp);
 } else {
     initializeApp();
+}
+
+// Hamburger Menu Logic
+document.addEventListener('DOMContentLoaded', () => {
+    const mobileBtn = document.getElementById('mobile-menu-btn');
+    const navbarMenu = document.getElementById('navbar-menu');
+
+    if (mobileBtn && navbarMenu) {
+        mobileBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            navbarMenu.classList.toggle('active');
+            
+            // Icon Toggle
+            const icon = mobileBtn.querySelector('i');
+            if (navbarMenu.classList.contains('active')) {
+                icon.classList.remove('fa-bars');
+                icon.classList.add('fa-times');
+            } else {
+                icon.classList.remove('fa-times');
+                icon.classList.add('fa-bars');
+            }
+        });
+
+        // Close when clicking outside
+        document.addEventListener('click', (e) => {
+            if (navbarMenu.classList.contains('active') && 
+                !navbarMenu.contains(e.target) && 
+                !mobileBtn.contains(e.target)) {
+                closeMobileMenu();
+            }
+        });
+    }
+});
+
+function closeMobileMenu() {
+    const navbarMenu = document.getElementById('navbar-menu');
+    const mobileBtn = document.getElementById('mobile-menu-btn');
+    
+    if (navbarMenu) {
+        navbarMenu.classList.remove('active');
+        if (mobileBtn) {
+            const icon = mobileBtn.querySelector('i');
+            if (icon) {
+                icon.classList.remove('fa-times');
+                icon.classList.add('fa-bars');
+            }
+        }
+    }
+}
+
+
+/* ==========================================================================
+   APPEND THIS TO THE BOTTOM OF SCRIPT.JS
+   (This overrides previous functions to add Pagination & New Charts)
+   ========================================================================== */
+
+// --- New Global Variables for Pagination & Charts ---
+var violationsByStreamChart = null;
+var speedDistributionChart = null;
+var currentViolations = []; // Stores data for pagination
+var currentPage = 1;
+const ROWS_PER_PAGE = 5;
+
+// --- 1. Updated Chart Initialization (Adds 2 New Graphs) ---
+function initCharts() {
+    // Canvas Elements
+    const ctxType = document.getElementById('violationsByTypeChart');
+    const ctxStreams = document.getElementById('streamsVehiclesChart');
+    const ctxTime = document.getElementById('violationsOverTimeChart');
+    const ctxStreamDist = document.getElementById('violationsByStreamChart'); // New
+    const ctxSpeed = document.getElementById('speedDistributionChart');       // New
+
+    // 1. Violations Type (Bar)
+    if (ctxType && window.Chart) {
+        if (violationsByTypeChart) violationsByTypeChart.destroy();
+        violationsByTypeChart = new Chart(ctxType, {
+            type: 'bar',
+            data: { labels: [], datasets: [{ label: 'Violations', data: [], backgroundColor: 'rgba(6, 182, 212, 0.6)' }] },
+            options: { responsive: true, plugins: { legend: { display: false } } }
+        });
+    }
+    
+    // 2. Streams vs Vehicles (Doughnut)
+    if (ctxStreams && window.Chart) {
+        if (streamsVehiclesChart) streamsVehiclesChart.destroy();
+        streamsVehiclesChart = new Chart(ctxStreams, {
+            type: 'doughnut',
+            data: { labels: ['Active Streams', 'Total Vehicles'], datasets: [{ data: [0, 0], backgroundColor: ['#10b981', '#3b82f6'] }] },
+            options: { responsive: true }
+        });
+    }
+
+    // 3. Violations Over Time (Line)
+    if (ctxTime && window.Chart) {
+        if (violationsOverTimeChart) violationsOverTimeChart.destroy();
+        violationsOverTimeChart = new Chart(ctxTime, {
+            type: 'line',
+            data: { labels: [], datasets: [{ label: 'Violations', data: [], borderColor: '#ef4444', backgroundColor: 'rgba(239, 68, 68, 0.2)', fill: true }] },
+            options: { responsive: true }
+        });
+    }
+
+    // 4. NEW: Violations by Stream (Pie)
+    if (ctxStreamDist && window.Chart) {
+        if (violationsByStreamChart) violationsByStreamChart.destroy();
+        violationsByStreamChart = new Chart(ctxStreamDist, {
+            type: 'pie',
+            data: { 
+                labels: [], 
+                datasets: [{ 
+                    data: [], 
+                    backgroundColor: ['#f87171', '#fb923c', '#fbbf24', '#a3e635'] 
+                }] 
+            },
+            options: { responsive: true }
+        });
+    }
+
+    // 5. NEW: Speed Distribution (Bar)
+    if (ctxSpeed && window.Chart) {
+        if (speedDistributionChart) speedDistributionChart.destroy();
+        speedDistributionChart = new Chart(ctxSpeed, {
+            type: 'bar',
+            data: {
+                labels: ['0-30', '30-60', '60-90', '90+'],
+                datasets: [{
+                    label: 'Vehicle Count',
+                    data: [0, 0, 0, 0],
+                    backgroundColor: 'rgba(139, 92, 246, 0.6)'
+                }]
+            },
+            options: { responsive: true }
+        });
+    }
+}
+
+// --- 2. Updated Chart Data Logic ---
+function updateChartsFromStats(data) {
+    if (!data) return;
+
+    // Update Type Chart
+    if (violationsByTypeChart && data.violation_summary) {
+        const labels = Object.keys(data.violation_summary);
+        const values = labels.map(k => data.violation_summary[k]);
+        violationsByTypeChart.data.labels = labels.map(l => l.replace('_', ' ').toUpperCase());
+        violationsByTypeChart.data.datasets[0].data = values;
+        violationsByTypeChart.update();
+    }
+
+    // Update Stream/Vehicle Chart
+    if (streamsVehiclesChart) {
+        streamsVehiclesChart.data.datasets[0].data = [data.active_streams || 0, data.total_vehicles || 0];
+        streamsVehiclesChart.update();
+    }
+
+    const violationList = data.violations || [];
+
+    // Update Timeline Chart
+    if (violationsOverTimeChart && violationList.length > 0) {
+        const buckets = {};
+        violationList.forEach(v => {
+            if (!v.timestamp) return;
+            const d = new Date(v.timestamp);
+            if (isNaN(d.getTime())) return;
+            const key = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            buckets[key] = (buckets[key] || 0) + 1;
+        });
+        const sortedLabels = Object.keys(buckets).sort();
+        const values = sortedLabels.map(k => buckets[k]);
+        violationsOverTimeChart.data.labels = sortedLabels;
+        violationsOverTimeChart.data.datasets[0].data = values;
+        violationsOverTimeChart.update();
+    }
+
+    // Update New Stream Pie Chart
+    if (violationsByStreamChart && violationList.length > 0) {
+        const streamCounts = {};
+        violationList.forEach(v => {
+            const key = `Stream ${v.stream_id}`;
+            streamCounts[key] = (streamCounts[key] || 0) + 1;
+        });
+        violationsByStreamChart.data.labels = Object.keys(streamCounts);
+        violationsByStreamChart.data.datasets[0].data = Object.values(streamCounts);
+        violationsByStreamChart.update();
+    }
+
+    // Update New Speed Bar Chart
+    if (speedDistributionChart && violationList.length > 0) {
+        const speedBuckets = [0, 0, 0, 0]; // 0-30, 30-60, 60-90, 90+
+        violationList.forEach(v => {
+            const speed = v.speed_kmh || 0;
+            if (speed < 30) speedBuckets[0]++;
+            else if (speed < 60) speedBuckets[1]++;
+            else if (speed < 90) speedBuckets[2]++;
+            else speedBuckets[3]++;
+        });
+        speedDistributionChart.data.datasets[0].data = speedBuckets;
+        speedDistributionChart.update();
+    }
+}
+
+// --- 3. New Pagination Logic ---
+function renderPaginationTable() {
+    const tbody = document.getElementById('violationsTableBody') || document.getElementById('allViolationsTable');
+    if (!tbody) return;
+
+    const validData = currentViolations || [];
+    const totalItems = validData.length;
+    
+    // Slice data for current page
+    const startIndex = (currentPage - 1) * ROWS_PER_PAGE;
+    const endIndex = Math.min(startIndex + ROWS_PER_PAGE, totalItems);
+    const pageData = validData.slice(startIndex, endIndex);
+
+    // Update Footer Info
+    const paginationContainer = document.getElementById('tablePagination');
+    if (paginationContainer) {
+        if (totalItems === 0) {
+            paginationContainer.style.display = 'none';
+        } else {
+            paginationContainer.style.display = 'flex';
+            document.getElementById('pageStart').textContent = startIndex + 1;
+            document.getElementById('pageEnd').textContent = endIndex;
+            document.getElementById('totalRows').textContent = totalItems;
+        }
+    }
+
+    // Render Table Rows
+    if (totalItems === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="table-empty-state"><i class="fas fa-inbox"></i><p>No data available</p></td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = pageData.map(v => `
+        <tr>
+            <td>Stream ${v.stream_id}</td>
+            <td>${(v.violation_type || '').replace('_', ' ').toUpperCase()}</td>
+            <td>${formatSpeed(v.speed_kmh)}</td>
+            <td>${v.signal_state || 'N/A'}</td>
+            <td>${formatTime(v.timestamp)}</td>
+        </tr>
+    `).join('');
+
+    renderPaginationControls(totalItems);
+}
+
+function renderPaginationControls(totalItems) {
+    const controlsContainer = document.getElementById('paginationControls');
+    if (!controlsContainer) return;
+
+    const totalPages = Math.ceil(totalItems / ROWS_PER_PAGE);
+    let buttonsHtml = '';
+
+    // Prev Button
+    buttonsHtml += `<button class="page-btn" onclick="changePage(${currentPage - 1})" ${currentPage === 1 ? 'disabled' : ''}><i class="fas fa-chevron-left"></i></button>`;
+
+    // Simple Logic: 1, 2, 3 ... Last
+    if (totalPages <= 7) {
+        for (let i = 1; i <= totalPages; i++) {
+            buttonsHtml += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="changePage(${i})">${i}</button>`;
+        }
+    } else {
+        // Complex logic for many pages
+        if (currentPage <= 4) {
+            for (let i = 1; i <= 5; i++) buttonsHtml += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="changePage(${i})">${i}</button>`;
+            buttonsHtml += `<span class="page-dots">...</span>`;
+            buttonsHtml += `<button class="page-btn" onclick="changePage(${totalPages})">${totalPages}</button>`;
+        } else if (currentPage >= totalPages - 3) {
+            buttonsHtml += `<button class="page-btn" onclick="changePage(1)">1</button>`;
+            buttonsHtml += `<span class="page-dots">...</span>`;
+            for (let i = totalPages - 4; i <= totalPages; i++) buttonsHtml += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="changePage(${i})">${i}</button>`;
+        } else {
+            buttonsHtml += `<button class="page-btn" onclick="changePage(1)">1</button>`;
+            buttonsHtml += `<span class="page-dots">...</span>`;
+            for (let i = currentPage - 1; i <= currentPage + 1; i++) buttonsHtml += `<button class="page-btn ${i === currentPage ? 'active' : ''}" onclick="changePage(${i})">${i}</button>`;
+            buttonsHtml += `<span class="page-dots">...</span>`;
+            buttonsHtml += `<button class="page-btn" onclick="changePage(${totalPages})">${totalPages}</button>`;
+        }
+    }
+
+    // Next Button
+    buttonsHtml += `<button class="page-btn" onclick="changePage(${currentPage + 1})" ${currentPage === totalPages ? 'disabled' : ''}><i class="fas fa-chevron-right"></i></button>`;
+
+    controlsContainer.innerHTML = buttonsHtml;
+}
+
+window.changePage = function(newPage) {
+    const totalPages = Math.ceil((currentViolations.length || 0) / ROWS_PER_PAGE);
+    if (newPage >= 1 && newPage <= totalPages) {
+        currentPage = newPage;
+        renderPaginationTable();
+    }
+};
+
+// --- 4. Overridden Data Fetching (Links Data to Pagination) ---
+async function updateSystemStats() {
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/stats`);
+        const data = await response.json();
+        systemStats = data;
+
+        // Update Counts
+        if(document.getElementById('activeStreams')) document.getElementById('activeStreams').textContent = data.active_streams ?? 0;
+        if(document.getElementById('totalVehicles')) document.getElementById('totalVehicles').textContent = data.total_vehicles ?? 0;
+        
+        // If NO filter is active, update dashboard table/charts
+        const isFiltered = document.getElementById('analyticsDateFilter') && document.getElementById('analyticsDateFilter').value !== 'all';
+        if (!isFiltered) {
+            if(document.getElementById('totalViolations')) document.getElementById('totalViolations').textContent = data.total_violations ?? 0;
+            if(document.getElementById('speedViolations')) document.getElementById('speedViolations').textContent = data.violation_summary?.speed ?? 0;
+            
+            // Set global data and render table
+            currentViolations = data.violations || [];
+            
+            // Only update table if on a page that uses it
+            if (document.getElementById('violationsTableBody') || document.getElementById('allViolationsTable')) {
+                renderPaginationTable();
+            }
+            updateChartsFromStats(data);
+        }
+    } catch (e) { console.error('Stats fetch error', e); }
+}
+
+async function updateAnalyticsRange() {
+    const select = document.getElementById('analyticsDateFilter');
+    if (!select) return;
+    
+    analyticsDateRange = select.value;
+    const datePicker = document.getElementById('analyticsDatePicker');
+    
+    if (analyticsDateRange === 'custom') {
+        datePicker.style.display = 'block';
+        if (!datePicker.value) return; 
+    } else {
+        datePicker.style.display = 'none';
+    }
+    
+    // Build Query
+    let query = '?limit=500';
+    if (analyticsDateRange === 'custom' && datePicker.value) {
+        query += `&specific_date=${encodeURIComponent(datePicker.value)}`;
+    } else if (analyticsDateRange !== 'all') {
+        query += `&date_range=${encodeURIComponent(analyticsDateRange)}`;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/db/violations${query}`, { headers: getAuthHeaders() });
+        const data = await response.json();
+        const violations = data.violations || [];
+
+        // Update Summaries
+        const summary = { speed: 0, red_light: 0, stop_line: 0, lane_change: 0 };
+        violations.forEach(v => {
+            if (summary.hasOwnProperty(v.violation_type)) summary[v.violation_type]++;
+        });
+
+        if(document.getElementById('totalViolations')) document.getElementById('totalViolations').textContent = violations.length;
+        if(document.getElementById('speedViolations')) document.getElementById('speedViolations').textContent = summary.speed;
+        if(document.getElementById('redLightCount')) document.getElementById('redLightCount').textContent = summary.red_light;
+        if(document.getElementById('laneChangeCount')) document.getElementById('laneChangeCount').textContent = summary.lane_change;
+
+        // Set Pagination Data & Render
+        currentViolations = violations;
+        currentPage = 1; 
+        renderPaginationTable();
+
+        // Update Charts
+        const statsLike = { violation_summary: summary, violations: violations };
+        updateChartsFromStats(statsLike);
+
+    } catch (err) { console.error('Analytics fetch error', err); }
+}
+// --- MONITORING LAYOUT SWAP LOGIC ---
+
+// Track which stream index is currently in the big card UI
+let bigStreamIndex = 2; // default: Stream 3 in big card
+
+function swapToBigScreen(smallIndex) {
+  // smallIndex is the logical stream index (0,1,3) from the small cards
+  if (smallIndex === bigStreamIndex) return;
+
+  const bigCard = document.querySelector('.big-stream-card');
+  const smallCard = document.querySelector(`.small-stream-card[data-stream="${smallIndex}"]`);
+  if (!bigCard || !smallCard) return;
+
+  const oldBigIndex = bigStreamIndex;
+  bigStreamIndex = smallIndex;
+
+  // Update header titles
+  const bigTitleEl = bigCard.querySelector('h3');
+  const smallTitleEl = smallCard.querySelector('h3');
+  if (bigTitleEl && smallTitleEl) {
+    const bigBase = smallTitleEl.textContent.replace(' (Main)', '');
+    const smallBase = bigTitleEl.textContent.replace(' (Main)', '');
+    bigTitleEl.textContent = `${bigBase} (Main)`;
+    smallTitleEl.textContent = smallBase;
+  }
+
+  // Swap DOM IDs for all elements associated with the streams
+  swapStreamElements(oldBigIndex, smallIndex);
+
+  // Update data-stream attribute so next click still works
+  smallCard.dataset.stream = String(oldBigIndex);
+
+  // Visual active state
+  document.querySelectorAll('.big-stream-card').forEach(c => c.classList.remove('active-big'));
+  bigCard.classList.add('active-big');
+}
+
+/**
+ * Swap all UI elements (ids + event bindings) between two stream indices
+ * without changing your backend logic.
+ */
+function swapStreamElements(a, b) {
+  const idBases = ['stream', 'placeholder', 'status', 'streamUrl', 'videoFile', 'selectedFile', 'fileName'];
+
+  idBases.forEach(base => {
+    const elA = document.getElementById(`${base}${a}`);
+    const elB = document.getElementById(`${base}${b}`);
+
+    if (!elA && !elB) return;
+
+    // Temporary id for A so we can swap
+    if (elA) elA.id = `${base}${a}_tmp`;
+
+    if (elB) elB.id = `${base}${a}`;
+    if (elA) elA.id = `${base}${b}`;
+  });
+
+  // Fix upload buttons / labels for these two indices
+  setupFileUpload(a);
+  setupFileUpload(b);
+
+  // Update buttons' onclick handlers
+  fixStreamButtonsForIndex(a);
+  fixStreamButtonsForIndex(b);
+}
+
+function fixStreamButtonsForIndex(index) {
+  const card = document.querySelector(
+    `.small-stream-card[data-stream="${index}"], .big-stream-card[data-stream="${index}"]`
+  );
+  if (!card) return;
+
+  const startBtn = card.querySelector('button.btn.btn-primary');
+  const stopBtn = card.querySelector('button.btn.btn-danger');
+  const uploadBtn = card.querySelector('button.btn.btn-accent');
+
+  if (startBtn) startBtn.onclick = (e) => { e.stopPropagation(); startStream(index); };
+  if (stopBtn) stopBtn.onclick = (e) => { e.stopPropagation(); stopStream(index); };
+  if (uploadBtn) uploadBtn.onclick = (e) => { e.stopPropagation(); uploadStreamVideo(index); };
+}
+
+/**
+ * Extend existing setupFileUpload so it can be safely called multiple times
+ * and used with the new layout.
+ */
+function setupFileUpload(index) {
+  const fileInput = document.getElementById(`videoFile${index}`);
+  const uploadLabel = fileInput ? document.querySelector(`label[for="videoFile${index}"]`) : null;
+  const selectedFile = document.getElementById(`selectedFile${index}`);
+  const fileName = document.getElementById(`fileName${index}`);
+
+  if (!fileInput || !uploadLabel || !selectedFile || !fileName) return;
+
+  const uploadBox = uploadLabel.querySelector('.upload-box');
+
+  fileInput.onchange = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      fileName.textContent = file.name;
+      selectedFile.style.display = 'flex';
+    } else {
+      selectedFile.style.display = 'none';
+    }
+  };
+
+  uploadLabel.ondragover = (e) => {
+    e.preventDefault();
+    if (!uploadBox) return;
+    uploadBox.style.borderColor = 'var(--primary-green)';
+    uploadBox.style.background = 'rgba(124,179,66,0.08)';
+  };
+
+  uploadLabel.ondragleave = () => {
+    if (!uploadBox) return;
+    uploadBox.style.borderColor = 'var(--light-gray)';
+    uploadBox.style.background = 'rgba(0,0,0,0.02)';
+  };
+
+  uploadLabel.ondrop = (e) => {
+    e.preventDefault();
+    if (uploadBox) {
+      uploadBox.style.borderColor = 'var(--light-gray)';
+      uploadBox.style.background = 'rgba(0,0,0,0.02)';
+    }
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      fileInput.files = files;
+      fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  };
 }
