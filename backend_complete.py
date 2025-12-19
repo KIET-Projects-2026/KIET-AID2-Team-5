@@ -387,40 +387,111 @@ logger = logging.getLogger(__name__)
 
 # ==================== YOUTUBE STREAM HANDLER ====================
 
-def get_youtube_stream_url(youtube_url):
-    """Extract actual stream URL from YouTube video"""
-    try:
-        logger.info(f"Extracting YouTube stream from: {youtube_url}")
-        cmd = [
-            'yt-dlp',
-            '-f', 'best[ext=mp4]',
-            '-g',
-            youtube_url
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        
-        if result.returncode != 0:
-            logger.error(f"yt-dlp error: {result.stderr}")
-            return None
+def get_youtube_stream_url(youtube_url, max_retries=3):
+    """Extract actual stream URL from YouTube video with improved error handling"""
+    import time
+    import random
+    
+    # Modern user agent to avoid bot detection
+    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Extracting YouTube stream from: {youtube_url} (attempt {attempt + 1}/{max_retries})")
             
-        stream_url = result.stdout.strip()
-        if stream_url:
-            logger.info(f"Stream URL extracted successfully: {stream_url[:100]}...")
-            return stream_url
-        else:
-            logger.error(f"No stream URL found. stderr: {result.stderr}")
+            # Enhanced yt-dlp command with better options
+            cmd = [
+                'yt-dlp',
+                '--no-warnings',  # Reduce noise in logs
+                '--no-check-certificate',  # Avoid SSL issues
+                '--user-agent', user_agent,  # Modern user agent
+                '--extractor-args', 'youtube:player_client=android',  # Use Android client (less bot detection)
+                '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # Better format selection
+                '--no-playlist',  # Only extract single video
+                '--socket-timeout', '30',  # Connection timeout
+                '--retries', '3',  # Retry failed requests
+                '--fragment-retries', '3',  # Retry fragment downloads
+                '--skip-unavailable-fragments',  # Skip unavailable parts
+                '-g',  # Get URL only
+                youtube_url
+            ]
+            
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                timeout=60,  # Increased timeout
+                env={**os.environ, 'PYTHONUNBUFFERED': '1'}
+            )
+            
+            if result.returncode == 0:
+                stream_url = result.stdout.strip()
+                if stream_url and stream_url.startswith('http'):
+                    logger.info(f"Stream URL extracted successfully: {stream_url[:100]}...")
+                    return stream_url
+                else:
+                    logger.warning(f"Invalid stream URL received: {stream_url[:100] if stream_url else 'empty'}")
+            
+            # Check for specific errors
+            stderr = result.stderr.lower()
+            if '429' in stderr or 'too many requests' in stderr:
+                wait_time = (attempt + 1) * 5 + random.uniform(1, 3)  # Exponential backoff with jitter
+                logger.warning(f"Rate limited by YouTube. Waiting {wait_time:.1f}s before retry...")
+                if attempt < max_retries - 1:
+                    time.sleep(wait_time)
+                    continue
+            elif 'bot' in stderr or 'sign in' in stderr:
+                # Try alternative method with different client
+                logger.info("Bot detection detected, trying alternative extraction method...")
+                cmd_alt = [
+                    'yt-dlp',
+                    '--no-warnings',
+                    '--user-agent', user_agent,
+                    '--extractor-args', 'youtube:player_client=web',  # Try web client
+                    '--format', 'best[ext=mp4]/best',
+                    '--no-playlist',
+                    '-g',
+                    youtube_url
+                ]
+                result_alt = subprocess.run(
+                    cmd_alt,
+                    capture_output=True,
+                    text=True,
+                    timeout=60,
+                    env={**os.environ, 'PYTHONUNBUFFERED': '1'}
+                )
+                if result_alt.returncode == 0:
+                    stream_url = result_alt.stdout.strip()
+                    if stream_url and stream_url.startswith('http'):
+                        logger.info(f"Stream URL extracted with alternative method: {stream_url[:100]}...")
+                        return stream_url
+            
+            logger.error(f"yt-dlp error (attempt {attempt + 1}): {result.stderr[:500]}")
+            
+            # Wait before retry (except on last attempt)
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 2 + random.uniform(0.5, 1.5)
+                logger.info(f"Retrying in {wait_time:.1f}s...")
+                time.sleep(wait_time)
+                
+        except FileNotFoundError:
+            logger.error("yt-dlp not found! Please install it: pip install yt-dlp")
             return None
-    except FileNotFoundError:
-        logger.error("yt-dlp not found! Please install it: pip install yt-dlp")
-        return None
-    except subprocess.TimeoutExpired:
-        logger.error("YouTube stream extraction timed out")
-        return None
-    except Exception as e:
-        logger.error(f"Failed to get YouTube stream: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        except subprocess.TimeoutExpired:
+            logger.error(f"YouTube stream extraction timed out (attempt {attempt + 1})")
+            if attempt < max_retries - 1:
+                time.sleep(5)
+                continue
+        except Exception as e:
+            logger.error(f"Failed to get YouTube stream (attempt {attempt + 1}): {e}")
+            if attempt < max_retries - 1:
+                time.sleep(3)
+                continue
+            import traceback
+            traceback.print_exc()
+    
+    logger.error(f"Failed to extract YouTube stream after {max_retries} attempts")
+    return None
 
 # ==================== TRAFFIC LIGHT DETECTION ====================
 
@@ -2220,13 +2291,17 @@ async def upload_video(stream_id: int, file: UploadFile = File(...), save_output
     
     # Validate file type
     allowed_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm', '.m4v']
-    file_extension = Path(file.filename).suffix.lower()
+    file_extension = Path(file.filename).suffix.lower() if file.filename else ''
     
-    if file_extension not in allowed_extensions:
+    if not file_extension or file_extension not in allowed_extensions:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid file type. Allowed: {', '.join(allowed_extensions)}"
         )
+    
+    # Maximum file size: 500MB (adjust as needed)
+    MAX_FILE_SIZE_MB = 500
+    MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
     
     try:
         # Create unique filename
@@ -2234,16 +2309,42 @@ async def upload_video(stream_id: int, file: UploadFile = File(...), save_output
         safe_filename = f"stream{stream_id}_{timestamp}{file_extension}"
         file_path = Config.UPLOADS_DIR / safe_filename
         
-        # Save uploaded file
-        logger.info(f"Saving uploaded file for stream {stream_id}: {file_path}")
-        content = await file.read()
-        with open(file_path, "wb") as buffer:
-            buffer.write(content)
+        # Ensure uploads directory exists
+        Config.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
         
-        file_size_mb = len(content) / (1024 * 1024)
-        logger.info(f"File saved: {file_path} ({file_size_mb:.2f} MB)")
+        # Save uploaded file with chunked reading for large files
+        logger.info(f"Receiving uploaded file for stream {stream_id}: {file.filename}")
+        file_size = 0
+        chunk_size = 1024 * 1024  # 1MB chunks
+        
+        with open(file_path, "wb") as buffer:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                
+                # Check file size limit
+                if file_size > MAX_FILE_SIZE_BYTES:
+                    # Clean up partial file
+                    if file_path.exists():
+                        file_path.unlink()
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"File too large. Maximum size is {MAX_FILE_SIZE_MB}MB"
+                    )
+                
+                buffer.write(chunk)
+        
+        file_size_mb = file_size / (1024 * 1024)
+        logger.info(f"File saved successfully: {file_path} ({file_size_mb:.2f} MB)")
+        
+        # Verify file exists and is readable
+        if not file_path.exists() or file_path.stat().st_size == 0:
+            raise HTTPException(status_code=500, detail="File was not saved correctly")
         
         # Start processing the uploaded video
+        logger.info(f"Starting stream processing for uploaded video: {file_path}")
         success = manager.start_stream(stream_id, str(file_path), save_output)
         
         if success:
@@ -2256,11 +2357,24 @@ async def upload_video(stream_id: int, file: UploadFile = File(...), save_output
                 "file_path": str(file_path)
             }
         else:
-            raise HTTPException(status_code=500, detail="Failed to start stream after upload")
+            # Clean up file if stream start failed
+            if file_path.exists():
+                file_path.unlink()
+            raise HTTPException(status_code=500, detail="Failed to start stream after upload. Please check the video file format.")
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Upload error for stream {stream_id}: {e}")
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        logger.error(f"Error uploading video: {e}")
+        import traceback
+        traceback.print_exc()
+        # Clean up file on error
+        if 'file_path' in locals() and file_path.exists():
+            try:
+                file_path.unlink()
+            except:
+                pass
+        raise HTTPException(status_code=500, detail=f"Failed to upload video: {str(e)}")
 
 @app.get("/health")
 async def health_check():

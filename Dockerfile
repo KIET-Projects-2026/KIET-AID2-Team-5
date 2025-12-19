@@ -2,6 +2,7 @@
 FROM python:3.10-slim
 
 # Install system dependencies required for OpenCV and video processing
+# Also install Node.js for yt-dlp JavaScript runtime (required for YouTube)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libgl1 \
@@ -12,6 +13,11 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     git \
     wget \
+    curl \
+    ca-certificates \
+    gnupg \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -50,4 +56,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD python -c "import requests; requests.get('http://localhost:8000/health')" || exit 1
 
 # Run application with uvicorn
-CMD ["uvicorn", "backend_complete:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+# Increased timeout for large file uploads and YouTube extraction
+CMD ["uvicorn", "backend_complete:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--timeout-keep-alive", "300", "--timeout-graceful-shutdown", "30"]

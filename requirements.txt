@@ -19,8 +19,8 @@ lapx>=0.5.2
 # Async file handling
 aiofiles==23.2.1
 
-# For YouTube streams (Required)
-yt-dlp>=2023.10.13
+# For YouTube streams (Required) - Use latest version for better YouTube support
+yt-dlp>=2024.12.0
 
 # Add for video streaming support
 requests==2.31.0
