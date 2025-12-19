@@ -395,6 +395,16 @@ def get_youtube_stream_url(youtube_url, max_retries=3):
     # Modern user agent to avoid bot detection
     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     
+    # Check for cookies file in environment or common locations
+    cookies_file = os.getenv("YOUTUBE_COOKIES_FILE")
+    cookies_args = []
+    if cookies_file and os.path.exists(cookies_file):
+        cookies_args = ['--cookies', cookies_file]
+        logger.info(f"Using cookies file: {cookies_file}")
+    elif os.path.exists("cookies.txt"):
+        cookies_args = ['--cookies', 'cookies.txt']
+        logger.info("Using cookies.txt from current directory")
+    
     # Multiple format strategies that work with OpenCV VideoCapture
     # Priority: single stream formats that OpenCV can read directly
     format_strategies = [
@@ -402,15 +412,16 @@ def get_youtube_stream_url(youtube_url, max_retries=3):
         'best[protocol=https][ext=mp4]/best[protocol=https]/best[ext=mp4]/best',
         # Strategy 2: Worst quality but most compatible
         'worst[protocol=https][ext=mp4]/worst[protocol=https]/worst',
-        # Strategy 3: Medium quality
-        '18/22/37/38',  # YouTube format codes for mp4
+        # Strategy 3: Medium quality - specific format IDs that work
+        '18/22/37/38/134/135/136/137/298/299',  # YouTube format codes for mp4
         # Strategy 4: Any available format
         'best[protocol=https]/best',
         # Strategy 5: Fallback to any format
         'best'
     ]
     
-    client_strategies = ['android', 'web', 'ios', 'mweb']
+    # Try different client types - prioritize ones less likely to trigger bot detection
+    client_strategies = ['android', 'ios', 'mweb', 'web']
     
     for attempt in range(max_retries):
         try:
@@ -423,6 +434,7 @@ def get_youtube_stream_url(youtube_url, max_retries=3):
                     try:
                         logger.info(f"Trying format strategy {format_idx + 1}/{len(format_strategies)}, client: {client_type}")
                         
+                        # Build command with anti-bot detection options
                         cmd = [
                             'yt-dlp',
                             '--no-warnings',
@@ -435,9 +447,17 @@ def get_youtube_stream_url(youtube_url, max_retries=3):
                             '--retries', '2',
                             '--fragment-retries', '2',
                             '--skip-unavailable-fragments',
+                            # Anti-bot detection options
+                            '--no-call-home',  # Don't call home
+                            '--extractor-retries', '3',  # Retry extraction
+                            '--sleep-requests', '1',  # Sleep between requests
+                            '--sleep-interval', '1',  # Sleep interval
                             '-g',  # Get URL only
                             youtube_url
                         ]
+                        
+                        # Add cookies if available
+                        cmd.extend(cookies_args)
                         
                         result = subprocess.run(
                             cmd,
@@ -463,8 +483,42 @@ def get_youtube_stream_url(youtube_url, max_retries=3):
                             else:
                                 logger.warning(f"Invalid stream URL received: {stream_url[:100] if stream_url else 'empty'}")
                         
-                        # Check for rate limiting
-                        stderr = result.stderr.lower()
+                        # Check for specific errors
+                        stderr = result.stderr.lower() if result.stderr else ''
+                        
+                        # Bot detection - try with cookies or alternative method
+                        if 'bot' in stderr or 'sign in' in stderr or 'cookies' in stderr:
+                            logger.warning(f"Bot detection triggered with client {client_type}, trying alternative approach...")
+                            # Try with embedded player approach
+                            if not cookies_args:  # Only try alternative if no cookies available
+                                try:
+                                    alt_cmd = [
+                                        'yt-dlp',
+                                        '--no-warnings',
+                                        '--user-agent', user_agent,
+                                        '--extractor-args', f'youtube:player_client={client_type}:player_skip=webpage',
+                                        '--format', 'worst[ext=mp4]/worst',  # Use worst quality to avoid bot detection
+                                        '--no-playlist',
+                                        '-g',
+                                        youtube_url
+                                    ]
+                                    alt_result = subprocess.run(
+                                        alt_cmd,
+                                        capture_output=True,
+                                        text=True,
+                                        timeout=60,
+                                        env={**os.environ, 'PYTHONUNBUFFERED': '1'}
+                                    )
+                                    if alt_result.returncode == 0:
+                                        alt_url = alt_result.stdout.strip().split('\n')[0].strip()
+                                        if alt_url and alt_url.startswith('http'):
+                                            logger.info(f"✅ Alternative method succeeded: {alt_url[:100]}...")
+                                            return alt_url
+                                except Exception as alt_e:
+                                    logger.warning(f"Alternative method failed: {alt_e}")
+                            continue  # Try next client/format
+                        
+                        # Rate limiting
                         if '429' in stderr or 'too many requests' in stderr:
                             wait_time = (attempt + 1) * 5 + random.uniform(1, 3)
                             logger.warning(f"Rate limited by YouTube. Waiting {wait_time:.1f}s...")
@@ -478,14 +532,19 @@ def get_youtube_stream_url(youtube_url, max_retries=3):
                         logger.warning(f"Error with format {format_idx + 1}, client {client_type}: {e}")
                         continue
                 
-                # If we got rate limited, break format loop too
-                if '429' in stderr or 'too many requests' in stderr:
-                    break
+                # Check if we got rate limited (need to check result if it exists)
+                if 'result' in locals() and result and result.stderr:
+                    stderr_check = result.stderr.lower()
+                    if '429' in stderr_check or 'too many requests' in stderr_check:
+                        break
             
             # If all format strategies failed, log error
             logger.error(f"All format strategies failed (attempt {attempt + 1}/{max_retries})")
-            if result and result.stderr:
-                logger.error(f"Last error: {result.stderr[:500]}")
+            last_error = None
+            if 'result' in locals() and result and result.stderr:
+                last_error = result.stderr[:500]
+            if last_error:
+                logger.error(f"Last error: {last_error}")
             
             # Wait before retry (except on last attempt)
             if attempt < max_retries - 1:
@@ -2707,36 +2766,69 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.error(f"WebSocket error: {e}")
         manager.websocket_clients.discard(websocket)
 
-@app.get("/dashboard")
-async def serve_dashboard():
-    """Serve dashboard HTML page"""
-    # Get the directory where this script is located using os.path
+def serve_frontend_page(filename: str):
+    """Helper function to serve frontend HTML pages"""
     script_dir = os.path.dirname(os.path.abspath(__file__))
-    dashboard_path = os.path.join(script_dir, "frontend", "dashboard.html")
+    page_path = os.path.join(script_dir, "frontend", filename)
     
-    logger.info(f"Looking for dashboard at: {dashboard_path}")
+    logger.info(f"Looking for {filename} at: {page_path}")
     
-    if os.path.exists(dashboard_path):
-        logger.info(f"Serving dashboard from: {dashboard_path}")
-        return FileResponse(dashboard_path, media_type="text/html")
+    if os.path.exists(page_path):
+        logger.info(f"Serving {filename} from: {page_path}")
+        return FileResponse(page_path, media_type="text/html")
     
     # Fallback paths
     fallback_paths = [
-        Path.cwd() / "frontend" / "dashboard.html",
-        Path("frontend/dashboard.html"),
+        Path.cwd() / "frontend" / filename,
+        Path(f"frontend/{filename}"),
     ]
     
     for path in fallback_paths:
         if path.exists():
-            logger.info(f"Serving dashboard from fallback: {path}")
+            logger.info(f"Serving {filename} from fallback: {path}")
             return FileResponse(str(path), media_type="text/html")
     
-    logger.error(f"Dashboard not found. Script dir: {script_dir}, CWD: {Path.cwd()}")
+    logger.error(f"{filename} not found. Script dir: {script_dir}, CWD: {Path.cwd()}")
+    raise HTTPException(status_code=404, detail=f"{filename} not found")
+
+@app.get("/dashboard")
+@app.get("/dashboard.html")
+async def serve_dashboard():
+    """Serve dashboard HTML page"""
+    return serve_frontend_page("dashboard.html")
+
+@app.get("/analytics")
+@app.get("/analytics.html")
+async def serve_analytics():
+    """Serve analytics HTML page"""
+    return serve_frontend_page("analytics.html")
+
+@app.get("/monitoring")
+@app.get("/monitoring.html")
+async def serve_monitoring():
+    """Serve monitoring HTML page"""
+    return serve_frontend_page("monitoring.html")
+
+@app.get("/frontend/Logo.png")
+async def serve_logo():
+    """Serve logo image directly"""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    logo_path = os.path.join(script_dir, "frontend", "Logo.png")
     
-    raise HTTPException(
-        status_code=404, 
-        detail="Dashboard not found"
-    )
+    if os.path.exists(logo_path):
+        return FileResponse(logo_path, media_type="image/png")
+    
+    # Fallback paths
+    fallback_paths = [
+        Path.cwd() / "frontend" / "Logo.png",
+        Path("frontend/Logo.png"),
+    ]
+    
+    for path in fallback_paths:
+        if path.exists():
+            return FileResponse(str(path), media_type="image/png")
+    
+    raise HTTPException(status_code=404, detail="Logo not found")
 
 @app.on_event("startup")
 async def startup_event():
