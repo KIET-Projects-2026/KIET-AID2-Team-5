@@ -8,24 +8,39 @@
     <link rel="stylesheet" href="/frontend/styles.css">
 </head>
 <body class="dashboard-body">
-    <!-- Navigation Bar -->
     <nav class="navbar navbar-dashboard">
         <div class="navbar-container">
             <div class="navbar-brand">
                 <img src="/frontend/Logo.png" alt="TMS Logo" class="brand-logo">
             </div>
-            <div class="navbar-menu">
-                <a class="nav-link active" href="analytics.html">
+
+            <button class="navbar-toggle" id="mobile-menu-btn" aria-label="Toggle navigation">
+                <i class="fas fa-bars"></i>
+            </button>
+
+            <div class="navbar-menu" id="navbar-menu">
+                <a class="nav-link active" href="analytics.html" onclick="closeMobileMenu()">
                     <i class="fas fa-chart-line"></i> Analytics
                 </a>
-                <a class="nav-link" href="monitoring.html">
+                <a class="nav-link" href="monitoring.html" onclick="closeMobileMenu()">
                     <i class="fas fa-video"></i> Monitoring
                 </a>
-                <a class="nav-link" href="dashboard.html">
+                <a class="nav-link" href="dashboard.html" onclick="closeMobileMenu()">
                     <i class="fas fa-gauge"></i> Overview
                 </a>
+
+                <div class="mobile-auth-btn">
+                    <div class="mobile-user-info">
+                        <i class="fas fa-user-circle"></i>
+                        <span id="mobileUserName">Logged in User</span>
+                    </div>
+                    <button class="btn btn-danger full-width" onclick="logout()">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </button>
+                </div>
             </div>
-            <div class="navbar-actions">
+
+            <div class="navbar-actions desktop-only">
                 <button class="notification-btn">
                     <i class="fas fa-bell"></i>
                     <span class="notification-badge" id="notificationBadge">0</span>
@@ -41,16 +56,6 @@
                         <i class="fas fa-chevron-down dropdown-arrow"></i>
                     </div>
                     <div class="dropdown-menu">
-                        <div class="dropdown-item" onclick="window.location.href='analytics.html'">
-                            <i class="fas fa-chart-line"></i>
-                            <span>Analytics</span>
-                        </div>
-                        <div class="dropdown-item" onclick="window.location.href='monitoring.html'">
-                            <i class="fas fa-video"></i>
-                            <span>Monitoring</span>
-                        </div>
-                        <!-- Violations are now reviewed from the Overview dashboard -->
-                        <div class="dropdown-divider"></div>
                         <button class="dropdown-item dropdown-item-danger" onclick="logout()">
                             <i class="fas fa-sign-out-alt"></i>
                             <span>Logout</span>
@@ -61,135 +66,142 @@
         </div>
     </nav>
 
-    <!-- Main Content -->
     <div class="dashboard-main">
-        <div class="page-header">
+        <!-- <div class="page-header">
             <h1 class="page-title">
-                <i class="fas fa-chart-line"></i>
-                Traffic Analytics
+                <i class="fas fa-chart-pie"></i>
+                Traffic Data Intelligence
             </h1>
-        </div>
+            <p class="page-subtitle">Historical trends, violation distribution, and comprehensive data reports.</p>
+        </div> -->
 
-        <!-- Analytics Date Range Filter -->
         <section class="content-section">
             <div class="section-header">
                 <h2 class="section-title">
-                    <i class="fas fa-clock-rotate-left"></i>
-                    Analytics Period
+                    <i class="fas fa-filter"></i>
+                    Report Configuration
                 </h2>
             </div>
             <div class="filter-container">
                 <select id="analyticsDateFilter" class="form-select" onchange="updateAnalyticsRange()">
-                    <option value="all">All Time</option>
-                    <option value="today">Today</option>
+                    <option value="all">Lifetime Data</option>
+                    <option value="today">Today's Report</option>
                     <option value="yesterday">Yesterday</option>
-                    <option value="last_week">Last 7 Days</option>
-                    <option value="last_month">Last 30 Days</option>
-                    <option value="last_year">Last Year</option>
-                    <option value="custom">Specific Date…</option>
+                    <option value="last_week">Past 7 Days</option>
+                    <option value="last_month">Past 30 Days</option>
+                    <option value="last_year">Past Year</option>
+                    <option value="custom">Select Custom Range...</option>
                 </select>
                 <input type="date" id="analyticsDatePicker" class="form-input" onchange="updateAnalyticsRange()">
             </div>
         </section>
 
-        <!-- Live Monitoring Status -->
         <section class="content-section">
             <div class="section-header">
                 <h2 class="section-title">
-                    <i class="fas fa-camera-security"></i>
-                    Live Monitoring Status
+                    <i class="fas fa-calculator"></i>
+                    Aggregated Metrics
                 </h2>
             </div>
             <div class="stats-grid">
                 <div class="stat-card">
-                    <i class="fas fa-video stat-card-icon"></i>
-                    <div class="stat-card-label">Active Streams</div>
-                    <div class="stat-card-value" id="activeStreams">0</div>
-                    <div class="stat-card-unit">Currently processing</div>
-                </div>
-                <div class="stat-card">
-                    <i class="fas fa-car stat-card-icon"></i>
-                    <div class="stat-card-label">Total Vehicles</div>
-                    <div class="stat-card-value" id="totalVehicles">0</div>
-                    <div class="stat-card-unit">Detected today</div>
-                </div>
-                <div class="stat-card">
-                    <i class="fas fa-exclamation-triangle stat-card-icon"></i>
-                    <div class="stat-card-label">Total Violations</div>
+                    <i class="fas fa-folder-open stat-card-icon"></i>
+                    <div class="stat-card-label">Total Incidents</div>
                     <div class="stat-card-value" id="totalViolations">0</div>
-                    <div class="stat-card-unit">All types</div>
+                    <div class="stat-card-unit">Recorded in period</div>
                 </div>
                 <div class="stat-card">
-                    <i class="fas fa-tachometer-alt stat-card-icon"></i>
-                    <div class="stat-card-label">Speed Violations</div>
+                    <i class="fas fa-gauge-high stat-card-icon"></i>
+                    <div class="stat-card-label">Speeding Events</div>
                     <div class="stat-card-value" id="speedViolations">0</div>
-                    <div class="stat-card-unit">Over limit</div>
+                    <div class="stat-card-unit">Recorded in period</div>
+                </div>
+                <div class="stat-card">
+                    <i class="fas fa-traffic-light stat-card-icon"></i>
+                    <div class="stat-card-label">Red Light Violations</div>
+                    <div class="stat-card-value" id="redLightCount">0</div>
+                    <div class="stat-card-unit">Recorded in period</div>
+                </div>
+
+            </div>
+        </section>
+
+        <section class="content-section">
+            <div class="section-header">
+                <h2 class="section-title">
+                    <i class="fas fa-chart-area"></i>
+                    Deep Dive Analytics
+                </h2>
+            </div>
+            <div class="chart-grid">
+                <div class="chart-card">
+                    <div class="chart-card-header">
+                        <h3 class="chart-card-title">Violation Trends Over Time</h3>
+                    </div>
+                    <canvas id="violationsOverTimeChart"></canvas>
+                </div>
+                
+                <div class="chart-card">
+                    <div class="chart-card-header">
+                        <h3 class="chart-card-title">Violation Type Breakdown</h3>
+                    </div>
+                    <canvas id="violationsByTypeChart"></canvas>
+                </div>
+
+                <div class="chart-card">
+                    <div class="chart-card-header">
+                        <h3 class="chart-card-title">Violations by Camera Stream</h3>
+                    </div>
+                    <canvas id="violationsByStreamChart"></canvas>
+                </div>
+
+                <div class="chart-card">
+                    <div class="chart-card-header">
+                        <h3 class="chart-card-title">Vehicle Speed Distribution</h3>
+                    </div>
+                    <canvas id="speedDistributionChart"></canvas>
                 </div>
             </div>
         </section>
 
-        <!-- Recent Violations -->
         <section class="content-section">
             <div class="section-header">
                 <h2 class="section-title">
-                    <i class="fas fa-list"></i>
-                    Recent Violations
+                    <i class="fas fa-table-list"></i>
+                    Detailed Incident Log
                 </h2>
             </div>
             <div class="table-container">
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Stream</th>
-                            <th>Violation Type</th>
-                            <th>Vehicle Speed</th>
-                            <th>Time</th>
+                            <th>Source Stream</th>
+                            <th>Violation Category</th>
+                            <th>Detected Speed</th>
+                            <th>Signal Status</th>
+                            <th>Timestamp</th>
                         </tr>
                     </thead>
-                    <tbody id="violationsTableBody">
+                    <tbody id="allViolationsTable">
                         <tr>
-                            <td colspan="4" class="table-empty-state">
+                            <td colspan="5" class="table-empty-state">
                                 <i class="fas fa-inbox"></i>
-                                <p>No violations detected</p>
+                                <p>Select a date range to view records</p>
                             </td>
                         </tr>
                     </tbody>
                 </table>
-            </div>
-        </section>
-
-        <!-- Analytics Charts -->
-        <section class="content-section">
-            <div class="section-header">
-                <h2 class="section-title">
-                    <i class="fas fa-chart-column"></i>
-                    Analytics & Graphs
-                </h2>
-            </div>
-            <div class="chart-grid">
-                <div class="chart-card">
-                    <div class="chart-card-header">
-                        <h3 class="chart-card-title">Violations by Type</h3>
+                <div class="table-footer" id="tablePagination" style="display: none;">
+                    <div class="pagination-info">
+                        Showing <span id="pageStart">0</span>-<span id="pageEnd">0</span> of <span id="totalRows">0</span>
                     </div>
-                    <canvas id="violationsByTypeChart"></canvas>
-                </div>
-                <div class="chart-card">
-                    <div class="chart-card-header">
-                        <h3 class="chart-card-title">Streams & Vehicles</h3>
-                    </div>
-                    <canvas id="streamsVehiclesChart"></canvas>
-                </div>
-                <div class="chart-card">
-                    <div class="chart-card-header">
-                        <h3 class="chart-card-title">Violations Over Time</h3>
-                    </div>
-                    <canvas id="violationsOverTimeChart"></canvas>
+                    <div class="pagination-controls" id="paginationControls">
+                        </div>
                 </div>
             </div>
         </section>
     </div>
 
-    <!-- Footer -->
     <footer class="footer">
         <div class="footer-content">
             <div class="footer-section">
@@ -209,7 +221,6 @@
         </div>
         <div class="footer-bottom">
             <p>&copy; 2024 TMS - Traffic Monitoring System. All rights reserved.</p>
-            <p>Built with <i class="fas fa-heart" style="color: #ef4444;"></i> for safer traffic</p>
         </div>
     </footer>
 

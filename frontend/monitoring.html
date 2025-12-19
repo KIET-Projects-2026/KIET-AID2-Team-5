@@ -8,24 +8,39 @@
     <link rel="stylesheet" href="/frontend/styles.css">
 </head>
 <body class="dashboard-body">
-    <!-- Navigation Bar -->
     <nav class="navbar navbar-dashboard">
         <div class="navbar-container">
             <div class="navbar-brand">
                 <img src="/frontend/Logo.png" alt="TMS Logo" class="brand-logo">
             </div>
-            <div class="navbar-menu">
-                <a class="nav-link" href="analytics.html">
+
+            <button class="navbar-toggle" id="mobile-menu-btn" aria-label="Toggle navigation">
+                <i class="fas fa-bars"></i>
+            </button>
+
+            <div class="navbar-menu" id="navbar-menu">
+                <a class="nav-link" href="analytics.html" onclick="closeMobileMenu()">
                     <i class="fas fa-chart-line"></i> Analytics
                 </a>
-                <a class="nav-link active" href="monitoring.html">
+                <a class="nav-link active" href="monitoring.html" onclick="closeMobileMenu()">
                     <i class="fas fa-video"></i> Monitoring
                 </a>
-                <a class="nav-link" href="dashboard.html">
+                <a class="nav-link" href="dashboard.html" onclick="closeMobileMenu()">
                     <i class="fas fa-gauge"></i> Overview
                 </a>
+
+                <div class="mobile-auth-btn">
+                    <div class="mobile-user-info">
+                        <i class="fas fa-user-circle"></i>
+                        <span id="mobileUserName">Logged in User</span>
+                    </div>
+                    <button class="btn btn-danger full-width" onclick="logout()">
+                        <i class="fas fa-sign-out-alt"></i> Logout
+                    </button>
+                </div>
             </div>
-            <div class="navbar-actions">
+
+            <div class="navbar-actions desktop-only">
                 <button class="notification-btn">
                     <i class="fas fa-bell"></i>
                     <span class="notification-badge" id="notificationBadge">0</span>
@@ -41,16 +56,6 @@
                         <i class="fas fa-chevron-down dropdown-arrow"></i>
                     </div>
                     <div class="dropdown-menu">
-                        <div class="dropdown-item" onclick="window.location.href='analytics.html'">
-                            <i class="fas fa-chart-line"></i>
-                            <span>Analytics</span>
-                        </div>
-                        <div class="dropdown-item" onclick="window.location.href='monitoring.html'">
-                            <i class="fas fa-video"></i>
-                            <span>Monitoring</span>
-                        </div>
-                        <!-- Violations are now reviewed from the Overview dashboard -->
-                        <div class="dropdown-divider"></div>
                         <button class="dropdown-item dropdown-item-danger" onclick="logout()">
                             <i class="fas fa-sign-out-alt"></i>
                             <span>Logout</span>
@@ -61,14 +66,16 @@
         </div>
     </nav>
 
-    <!-- Main Content -->
     <div class="dashboard-main">
-        <div class="page-header">
+        <!-- <div class="page-header">
             <h1 class="page-title">
                 <i class="fas fa-camera"></i>
                 Live Stream Monitoring
             </h1>
-        </div>
+            <p class="page-subtitle">
+                Manage RTSP, HTTP, or Video File streams for real-time inference.
+            </p>
+        </div> -->
 
         <section class="content-section">
             <div class="section-header">
@@ -78,215 +85,226 @@
                 </h2>
             </div>
 
-            <div class="stream-grid">
-                <!-- Stream 1 -->
-                <div class="stream-card">
-                    <div class="stream-card-header">
-                        <h3 class="stream-card-title">Stream 1</h3>
-                        <span class="status-badge status-inactive" id="status0">Inactive</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Live / YouTube Stream URL</label>
-                        <input type="text" class="form-input" id="streamUrl0" placeholder="e.g., RTSP / HTTP / YouTube URL">
-                    </div>
-
-                    <div class="upload-section">
-                        <label for="videoFile0" class="upload-label">
-                            <div class="upload-box">
-                                <i class="fas fa-film"></i>
-                                <span class="upload-title">Upload Video File</span>
-                                <p class="upload-subtitle">Click or drag to upload</p>
+            <!-- NEW MONITORING LAYOUT STAR T -->
+            <div class="monitoring-layout">
+                <!-- Left Panel: 3 Small Streams -->
+                <div class="small-streams-panel">
+                    <div class="stream-card-wrapper small" data-stream="0" onclick="swapToMainScreen(0)">
+                        <div class="stream-card-content">
+                            <div class="stream-header">
+                                <h3>Stream 1</h3>
+                                <span class="status-badge status-inactive" id="status0">INACTIVE</span>
                             </div>
-                            <input type="file" id="videoFile0" class="file-input" accept="video/*" />
-                        </label>
-                        <div id="selectedFile0" class="selected-file" style="display:none;">
-                            <i class="fas fa-check-circle"></i>
-                            <span id="fileName0"></span>
-                            <button type="button" class="file-clear-btn" onclick="clearStreamFile(0)">
-                                <i class="fas fa-times"></i>
-                            </button>
+
+                            <div class="stream-video">
+                                <div class="video-placeholder" id="placeholder0">
+                                    <i class="fas fa-video"></i>
+                                    <p>Stream Inactive</p>
+                                </div>
+                                <img id="stream0" class="video-feed" style="display:none;" alt="Stream 0">
+                            </div>
+
+                            <div class="stream-controls">
+                                <input type="text" class="stream-url" id="streamUrl0"
+                                       placeholder="RTSP/HTTP/YouTube URL">
+
+                                <div class="upload-section">
+                                    <label for="videoFile0" class="upload-label">
+                                        <div class="upload-box">
+                                            <i class="fas fa-film"></i>
+                                            <span class="upload-title">Upload Video</span>
+                                            <p class="upload-subtitle">Click or drag to upload</p>
+                                        </div>
+                                        <input type="file" id="videoFile0" class="file-input" accept="video/*" />
+                                    </label>
+                                    <div id="selectedFile0" class="selected-file" style="display:none;">
+                                        <i class="fas fa-check-circle"></i>
+                                        <span id="fileName0"></span>
+                                        <button type="button" class="file-clear-btn" onclick="event.stopPropagation(); clearStreamFile(0)">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="stream-buttons">
+                                    <button class="btn btn-primary" onclick="event.stopPropagation(); startStream(0)">
+                                        <i class="fas fa-play"></i> Start
+                                    </button>
+                                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopStream(0)">
+                                        <i class="fas fa-stop"></i> Stop
+                                    </button>
+                                    <button class="btn btn-accent" onclick="event.stopPropagation(); uploadStreamVideo(0)">
+                                        <i class="fas fa-upload"></i> Upload
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="video-container">
-                        <div class="video-placeholder" id="placeholder0">
-                            <i class="fas fa-video"></i>
-                            <p>Stream Inactive</p>
+                    <div class="stream-card-wrapper small" data-stream="1" onclick="swapToMainScreen(1)">
+                        <div class="stream-card-content">
+                            <div class="stream-header">
+                                <h3>Stream 2</h3>
+                                <span class="status-badge status-inactive" id="status1">INACTIVE</span>
+                            </div>
+
+                            <div class="stream-video">
+                                <div class="video-placeholder" id="placeholder1">
+                                    <i class="fas fa-video"></i>
+                                    <p>Stream Inactive</p>
+                                </div>
+                                <img id="stream1" class="video-feed" style="display:none;" alt="Stream 1">
+                            </div>
+
+                            <div class="stream-controls">
+                                <input type="text" class="stream-url" id="streamUrl1"
+                                       placeholder="RTSP/HTTP/YouTube URL">
+
+                                <div class="upload-section">
+                                    <label for="videoFile1" class="upload-label">
+                                        <div class="upload-box">
+                                            <i class="fas fa-film"></i>
+                                            <span class="upload-title">Upload Video</span>
+                                            <p class="upload-subtitle">Click or drag to upload</p>
+                                        </div>
+                                        <input type="file" id="videoFile1" class="file-input" accept="video/*" />
+                                    </label>
+                                    <div id="selectedFile1" class="selected-file" style="display:none;">
+                                        <i class="fas fa-check-circle"></i>
+                                        <span id="fileName1"></span>
+                                        <button type="button" class="file-clear-btn" onclick="event.stopPropagation(); clearStreamFile(1)">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="stream-buttons">
+                                    <button class="btn btn-primary" onclick="event.stopPropagation(); startStream(1)">
+                                        <i class="fas fa-play"></i> Start
+                                    </button>
+                                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopStream(1)">
+                                        <i class="fas fa-stop"></i> Stop
+                                    </button>
+                                    <button class="btn btn-accent" onclick="event.stopPropagation(); uploadStreamVideo(1)">
+                                        <i class="fas fa-upload"></i> Upload
+                                    </button>
+                                </div>
+                            </div>
                         </div>
-                        <img id="stream0" class="video-feed" style="display:none;" alt="Stream 0">
                     </div>
 
-                    <div class="stream-actions">
-                        <button class="btn btn-primary" onclick="startStream(0)">
-                            <i class="fas fa-play"></i> Start
-                        </button>
-                        <button class="btn btn-danger" onclick="stopStream(0)">
-                            <i class="fas fa-stop"></i> Stop
-                        </button>
-                        <button class="btn btn-accent" onclick="uploadStreamVideo(0)">
-                            <i class="fas fa-upload"></i> Upload
-                        </button>
+                    <div class="stream-card-wrapper small" data-stream="3" onclick="swapToMainScreen(3)">
+                        <div class="stream-card-content">
+                            <div class="stream-header">
+                                <h3>Stream 4</h3>
+                                <span class="status-badge status-inactive" id="status3">INACTIVE</span>
+                            </div>
+
+                            <div class="stream-video">
+                                <div class="video-placeholder" id="placeholder3">
+                                    <i class="fas fa-video"></i>
+                                    <p>Stream Inactive</p>
+                                </div>
+                                <img id="stream3" class="video-feed" style="display:none;" alt="Stream 3">
+                            </div>
+
+                            <div class="stream-controls">
+                                <input type="text" class="stream-url" id="streamUrl3"
+                                       placeholder="RTSP/HTTP/YouTube URL">
+
+                                <div class="upload-section">
+                                    <label for="videoFile3" class="upload-label">
+                                        <div class="upload-box">
+                                            <i class="fas fa-film"></i>
+                                            <span class="upload-title">Upload Video</span>
+                                            <p class="upload-subtitle">Click or drag to upload</p>
+                                        </div>
+                                        <input type="file" id="videoFile3" class="file-input" accept="video/*" />
+                                    </label>
+                                    <div id="selectedFile3" class="selected-file" style="display:none;">
+                                        <i class="fas fa-check-circle"></i>
+                                        <span id="fileName3"></span>
+                                        <button type="button" class="file-clear-btn" onclick="event.stopPropagation(); clearStreamFile(3)">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div class="stream-buttons">
+                                    <button class="btn btn-primary" onclick="event.stopPropagation(); startStream(3)">
+                                        <i class="fas fa-play"></i> Start
+                                    </button>
+                                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopStream(3)">
+                                        <i class="fas fa-stop"></i> Stop
+                                    </button>
+                                    <button class="btn btn-accent" onclick="event.stopPropagation(); uploadStreamVideo(3)">
+                                        <i class="fas fa-upload"></i> Upload
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Stream 2 -->
-                <div class="stream-card">
-                    <div class="stream-card-header">
-                        <h3 class="stream-card-title">Stream 2</h3>
-                        <span class="status-badge status-inactive" id="status1">Inactive</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Live / YouTube Stream URL</label>
-                        <input type="text" class="form-input" id="streamUrl1" placeholder="e.g., RTSP / HTTP / YouTube URL">
-                    </div>
-
-                    <div class="upload-section">
-                        <label for="videoFile1" class="upload-label">
-                            <div class="upload-box">
-                                <i class="fas fa-film"></i>
-                                <span class="upload-title">Upload Video File</span>
-                                <p class="upload-subtitle">Click or drag to upload</p>
+                <!-- Right Panel: 1 Big Main Stream -->
+                <div class="big-stream-panel">
+                    <div class="stream-card-wrapper big main-stream" data-stream="2">
+                        <div class="stream-card-content">
+                            <div class="stream-header">
+                                <h3>Stream 3 (Main)</h3>
+                                <span class="status-badge status-inactive" id="status2">INACTIVE</span>
                             </div>
-                            <input type="file" id="videoFile1" class="file-input" accept="video/*" />
-                        </label>
-                        <div id="selectedFile1" class="selected-file" style="display:none;">
-                            <i class="fas fa-check-circle"></i>
-                            <span id="fileName1"></span>
-                            <button type="button" class="file-clear-btn" onclick="clearStreamFile(1)">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        </div>
-                    </div>
 
-                    <div class="video-container">
-                        <div class="video-placeholder" id="placeholder1">
-                            <i class="fas fa-video"></i>
-                            <p>Stream Inactive</p>
-                        </div>
-                        <img id="stream1" class="video-feed" style="display:none;" alt="Stream 1">
-                    </div>
-
-                    <div class="stream-actions">
-                        <button class="btn btn-primary" onclick="startStream(1)">
-                            <i class="fas fa-play"></i> Start
-                        </button>
-                        <button class="btn btn-danger" onclick="stopStream(1)">
-                            <i class="fas fa-stop"></i> Stop
-                        </button>
-                        <button class="btn btn-accent" onclick="uploadStreamVideo(1)">
-                            <i class="fas fa-upload"></i> Upload
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Stream 3 -->
-                <div class="stream-card">
-                    <div class="stream-card-header">
-                        <h3 class="stream-card-title">Stream 3</h3>
-                        <span class="status-badge status-inactive" id="status2">Inactive</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Live / YouTube Stream URL</label>
-                        <input type="text" class="form-input" id="streamUrl2" placeholder="e.g., RTSP / HTTP / YouTube URL">
-                    </div>
-
-                    <div class="upload-section">
-                        <label for="videoFile2" class="upload-label">
-                            <div class="upload-box">
-                                <i class="fas fa-film"></i>
-                                <span class="upload-title">Upload Video File</span>
-                                <p class="upload-subtitle">Click or drag to upload</p>
+                            <div class="stream-video">
+                                <div class="video-placeholder" id="placeholder2">
+                                    <i class="fas fa-video"></i>
+                                    <p>Main Stream Inactive</p>
+                                </div>
+                                <img id="stream2" class="video-feed" style="display:none;" alt="Stream 2">
                             </div>
-                            <input type="file" id="videoFile2" class="file-input" accept="video/*" />
-                        </label>
-                        <div id="selectedFile2" class="selected-file" style="display:none;">
-                            <i class="fas fa-check-circle"></i>
-                            <span id="fileName2"></span>
-                            <button type="button" class="file-clear-btn" onclick="clearStreamFile(2)">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        </div>
-                    </div>
 
-                    <div class="video-container">
-                        <div class="video-placeholder" id="placeholder2">
-                            <i class="fas fa-video"></i>
-                            <p>Stream Inactive</p>
-                        </div>
-                        <img id="stream2" class="video-feed" style="display:none;" alt="Stream 2">
-                    </div>
+                            <div class="stream-controls">
+                                <input type="text" class="stream-url" id="streamUrl2"
+                                       placeholder="RTSP/HTTP/YouTube URL">
 
-                    <div class="stream-actions">
-                        <button class="btn btn-primary" onclick="startStream(2)">
-                            <i class="fas fa-play"></i> Start
-                        </button>
-                        <button class="btn btn-danger" onclick="stopStream(2)">
-                            <i class="fas fa-stop"></i> Stop
-                        </button>
-                        <button class="btn btn-accent" onclick="uploadStreamVideo(2)">
-                            <i class="fas fa-upload"></i> Upload
-                        </button>
-                    </div>
-                </div>
+                                <div class="upload-section">
+                                    <label for="videoFile2" class="upload-label">
+                                        <div class="upload-box">
+                                            <i class="fas fa-film"></i>
+                                            <span class="upload-title">Upload Video</span>
+                                            <p class="upload-subtitle">Click or drag to upload</p>
+                                        </div>
+                                        <input type="file" id="videoFile2" class="file-input" accept="video/*" />
+                                    </label>
+                                    <div id="selectedFile2" class="selected-file" style="display:none;">
+                                        <i class="fas fa-check-circle"></i>
+                                        <span id="fileName2"></span>
+                                        <button type="button" class="file-clear-btn" onclick="event.stopPropagation(); clearStreamFile(2)">
+                                            <i class="fas fa-times"></i>
+                                        </button>
+                                    </div>
+                                </div>
 
-                <!-- Stream 4 -->
-                <div class="stream-card">
-                    <div class="stream-card-header">
-                        <h3 class="stream-card-title">Stream 4</h3>
-                        <span class="status-badge status-inactive" id="status3">Inactive</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label class="form-label">Live / YouTube Stream URL</label>
-                        <input type="text" class="form-input" id="streamUrl3" placeholder="e.g., RTSP / HTTP / YouTube URL">
-                    </div>
-
-                    <div class="upload-section">
-                        <label for="videoFile3" class="upload-label">
-                            <div class="upload-box">
-                                <i class="fas fa-film"></i>
-                                <span class="upload-title">Upload Video File</span>
-                                <p class="upload-subtitle">Click or drag to upload</p>
+                                <div class="stream-buttons">
+                                    <button class="btn btn-primary" onclick="event.stopPropagation(); startStream(2)">
+                                        <i class="fas fa-play"></i> Start
+                                    </button>
+                                    <button class="btn btn-danger" onclick="event.stopPropagation(); stopStream(2)">
+                                        <i class="fas fa-stop"></i> Stop
+                                    </button>
+                                    <button class="btn btn-accent" onclick="event.stopPropagation(); uploadStreamVideo(2)">
+                                        <i class="fas fa-upload"></i> Upload
+                                    </button>
+                                </div>
                             </div>
-                            <input type="file" id="videoFile3" class="file-input" accept="video/*" />
-                        </label>
-                        <div id="selectedFile3" class="selected-file" style="display:none;">
-                            <i class="fas fa-check-circle"></i>
-                            <span id="fileName3"></span>
-                            <button type="button" class="file-clear-btn" onclick="clearStreamFile(3)">
-                                <i class="fas fa-times"></i>
-                            </button>
                         </div>
-                    </div>
-
-                    <div class="video-container">
-                        <div class="video-placeholder" id="placeholder3">
-                            <i class="fas fa-video"></i>
-                            <p>Stream Inactive</p>
-                        </div>
-                        <img id="stream3" class="video-feed" style="display:none;" alt="Stream 3">
-                    </div>
-
-                    <div class="stream-actions">
-                        <button class="btn btn-primary" onclick="startStream(3)">
-                            <i class="fas fa-play"></i> Start
-                        </button>
-                        <button class="btn btn-danger" onclick="stopStream(3)">
-                            <i class="fas fa-stop"></i> Stop
-                        </button>
-                        <button class="btn btn-accent" onclick="uploadStreamVideo(3)">
-                            <i class="fas fa-upload"></i> Upload
-                        </button>
                     </div>
                 </div>
             </div>
+            <!-- NEW MONITORING LAYOUT END -->
         </section>
     </div>
 
-    <!-- Footer -->
     <footer class="footer">
         <div class="footer-content">
             <div class="footer-section">
