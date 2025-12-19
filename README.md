@@ -197,6 +197,33 @@ uvicorn backend_complete:app --host 0.0.0.0 --port 8000 --reload
 #### Backend Deployment (Render)
 1. Create account at https://render.com
 2. Connect GitHub repository
+
+#### YouTube URL Extraction (Important for Production)
+
+The system supports YouTube URLs, but YouTube may detect automated requests. For best results in production:
+
+**Option 1: Use Cookies (Recommended)**
+1. Export YouTube cookies from your browser using a browser extension or yt-dlp:
+   ```bash
+   yt-dlp --cookies-from-browser chrome
+   ```
+2. Save the cookies file to your project root as `youtube_cookies.txt`
+3. Set environment variable in Render:
+   ```
+   YOUTUBE_COOKIES_FILE=/path/to/youtube_cookies.txt
+   ```
+
+**Option 2: Multiple Fallback Methods (Default)**
+The system automatically tries multiple extraction methods:
+- iOS client
+- Android client  
+- TV embedded client
+- Web client
+- Mobile web client
+
+If one method fails, it automatically tries the next. This works for most videos but may fail if YouTube detects bot activity.
+
+**Note**: The system will log helpful error messages if extraction fails. Check logs for specific guidance.
 3. Create new Web Service
 4. Set build command: `pip install -r requirements.txt`
 5. Set start command: `python backend_complete.py`

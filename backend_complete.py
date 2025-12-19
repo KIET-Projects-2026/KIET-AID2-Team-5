@@ -148,6 +148,10 @@ async def connect_to_mongodb():
         await database.violations.create_index("timestamp")
         await database.violations.create_index("stream_id")
         await database.violations.create_index("violation_type")
+        await database.streams.create_index("stream_id")
+        await database.streams.create_index("started_at")
+        await database.streams.create_index("status")
+        await database.streams.create_index([("stream_id", 1), ("status", 1)])  # Compound index
         logger.info("✅ MongoDB indexes created")
         
     except Exception as e:
@@ -223,6 +227,22 @@ class ViolationResponse(BaseModel):
     signal_state: Optional[str] = None
     timestamp: datetime
     image_path: Optional[str] = None
+
+class StreamMetadata(BaseModel):
+    """Model for stream metadata stored in database"""
+    stream_id: int
+    source_type: str  # 'youtube', 'upload', 'webcam', 'rtsp', etc.
+    source_url: Optional[str] = None  # Original URL or file path
+    youtube_url: Optional[str] = None  # Original YouTube URL if applicable
+    file_path: Optional[str] = None  # Path to uploaded file if applicable
+    file_size_mb: Optional[float] = None  # File size in MB for uploads
+    filename: Optional[str] = None  # Original filename for uploads
+    status: str  # 'running', 'stopped', 'error'
+    started_at: datetime
+    stopped_at: Optional[datetime] = None
+    output_path: Optional[str] = None  # Path to processed output video
+    violation_count: int = 0  # Number of violations detected
+    created_by: Optional[str] = None  # User email if authenticated
 
 # ==================== AUTH HELPER FUNCTIONS ====================
 
@@ -388,100 +408,148 @@ logger = logging.getLogger(__name__)
 # ==================== YOUTUBE STREAM HANDLER ====================
 
 def get_youtube_stream_url(youtube_url, max_retries=3):
-    """Extract actual stream URL from YouTube video with improved error handling"""
+    """Extract actual stream URL from YouTube video with improved error handling and multiple fallback methods"""
     import time
     import random
     
-    # Modern user agent to avoid bot detection
-    user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    # Modern user agents to rotate
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0"
+    ]
+    
+    # Multiple extraction strategies to try
+    extraction_strategies = [
+        {
+            'name': 'ios_client',
+            'args': [
+                '--extractor-args', 'youtube:player_client=ios',
+                '--format', 'best[ext=mp4]/best',
+            ]
+        },
+        {
+            'name': 'android_client',
+            'args': [
+                '--extractor-args', 'youtube:player_client=android',
+                '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            ]
+        },
+        {
+            'name': 'tv_embedded',
+            'args': [
+                '--extractor-args', 'youtube:player_client=tv_embedded',
+                '--format', 'best[ext=mp4]/best',
+            ]
+        },
+        {
+            'name': 'web_client',
+            'args': [
+                '--extractor-args', 'youtube:player_client=web',
+                '--format', 'best[ext=mp4]/best',
+            ]
+        },
+        {
+            'name': 'mweb_client',
+            'args': [
+                '--extractor-args', 'youtube:player_client=mweb',
+                '--format', 'best[ext=mp4]/best',
+            ]
+        }
+    ]
+    
+    # Try cookies file if available (for production deployment)
+    cookies_file = os.getenv("YOUTUBE_COOKIES_FILE", None)
+    cookies_args = []
+    if cookies_file and os.path.exists(cookies_file):
+        cookies_args = ['--cookies', cookies_file]
+        logger.info(f"Using cookies file: {cookies_file}")
     
     for attempt in range(max_retries):
         try:
             logger.info(f"Extracting YouTube stream from: {youtube_url} (attempt {attempt + 1}/{max_retries})")
             
-            # Enhanced yt-dlp command with better options
-            cmd = [
-                'yt-dlp',
-                '--no-warnings',  # Reduce noise in logs
-                '--no-check-certificate',  # Avoid SSL issues
-                '--user-agent', user_agent,  # Modern user agent
-                '--extractor-args', 'youtube:player_client=android',  # Use Android client (less bot detection)
-                '--format', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',  # Better format selection
-                '--no-playlist',  # Only extract single video
-                '--socket-timeout', '30',  # Connection timeout
-                '--retries', '3',  # Retry failed requests
-                '--fragment-retries', '3',  # Retry fragment downloads
-                '--skip-unavailable-fragments',  # Skip unavailable parts
-                '-g',  # Get URL only
-                youtube_url
-            ]
+            # Rotate user agent
+            user_agent = random.choice(user_agents)
             
-            result = subprocess.run(
-                cmd, 
-                capture_output=True, 
-                text=True, 
-                timeout=60,  # Increased timeout
-                env={**os.environ, 'PYTHONUNBUFFERED': '1'}
-            )
-            
-            if result.returncode == 0:
-                stream_url = result.stdout.strip()
-                if stream_url and stream_url.startswith('http'):
-                    logger.info(f"Stream URL extracted successfully: {stream_url[:100]}...")
-                    return stream_url
-                else:
-                    logger.warning(f"Invalid stream URL received: {stream_url[:100] if stream_url else 'empty'}")
-            
-            # Check for specific errors
-            stderr = result.stderr.lower()
-            if '429' in stderr or 'too many requests' in stderr:
-                wait_time = (attempt + 1) * 5 + random.uniform(1, 3)  # Exponential backoff with jitter
-                logger.warning(f"Rate limited by YouTube. Waiting {wait_time:.1f}s before retry...")
-                if attempt < max_retries - 1:
-                    time.sleep(wait_time)
+            # Try each extraction strategy
+            for strategy_idx, strategy in enumerate(extraction_strategies):
+                try:
+                    logger.info(f"Trying extraction method: {strategy['name']}")
+                    
+                    # Base command with common options
+                    cmd = [
+                        'yt-dlp',
+                        '--no-warnings',
+                        '--no-check-certificate',
+                        '--user-agent', user_agent,
+                        '--no-playlist',
+                        '--socket-timeout', '30',
+                        '--retries', '2',
+                        '--fragment-retries', '2',
+                        '--skip-unavailable-fragments',
+                        '--no-download',
+                        '--no-progress',
+                        '--quiet',
+                        '-g',  # Get URL only
+                    ]
+                    
+                    # Add cookies if available
+                    cmd.extend(cookies_args)
+                    
+                    # Add strategy-specific args
+                    cmd.extend(strategy['args'])
+                    
+                    # Add URL at the end
+                    cmd.append(youtube_url)
+                    
+                    result = subprocess.run(
+                        cmd,
+                        capture_output=True,
+                        text=True,
+                        timeout=45,
+                        env={**os.environ, 'PYTHONUNBUFFERED': '1'}
+                    )
+                    
+                    if result.returncode == 0:
+                        stream_url = result.stdout.strip()
+                        # yt-dlp may return multiple URLs (video + audio), take first valid one
+                        if stream_url:
+                            urls = [u.strip() for u in stream_url.split('\n') if u.strip().startswith('http')]
+                            if urls:
+                                final_url = urls[0]  # Use first valid URL
+                                logger.info(f"✅ Stream URL extracted successfully using {strategy['name']}: {final_url[:80]}...")
+                                return final_url
+                    
+                    # Check for specific errors
+                    stderr = result.stderr.lower()
+                    if '429' in stderr or 'too many requests' in stderr:
+                        wait_time = (attempt + 1) * 8 + random.uniform(2, 5)
+                        logger.warning(f"Rate limited by YouTube. Waiting {wait_time:.1f}s...")
+                        if attempt < max_retries - 1:
+                            time.sleep(wait_time)
+                            break  # Break from strategy loop, retry with next attempt
+                    
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"Strategy {strategy['name']} timed out, trying next...")
                     continue
-            elif 'bot' in stderr or 'sign in' in stderr:
-                # Try alternative method with different client
-                logger.info("Bot detection detected, trying alternative extraction method...")
-                cmd_alt = [
-                    'yt-dlp',
-                    '--no-warnings',
-                    '--user-agent', user_agent,
-                    '--extractor-args', 'youtube:player_client=web',  # Try web client
-                    '--format', 'best[ext=mp4]/best',
-                    '--no-playlist',
-                    '-g',
-                    youtube_url
-                ]
-                result_alt = subprocess.run(
-                    cmd_alt,
-                    capture_output=True,
-                    text=True,
-                    timeout=60,
-                    env={**os.environ, 'PYTHONUNBUFFERED': '1'}
-                )
-                if result_alt.returncode == 0:
-                    stream_url = result_alt.stdout.strip()
-                    if stream_url and stream_url.startswith('http'):
-                        logger.info(f"Stream URL extracted with alternative method: {stream_url[:100]}...")
-                        return stream_url
+                except Exception as e:
+                    logger.debug(f"Strategy {strategy['name']} failed: {e}")
+                    continue
             
-            logger.error(f"yt-dlp error (attempt {attempt + 1}): {result.stderr[:500]}")
+            # If we get here, all strategies failed for this attempt
+            logger.warning(f"All extraction strategies failed for attempt {attempt + 1}")
             
             # Wait before retry (except on last attempt)
             if attempt < max_retries - 1:
-                wait_time = (attempt + 1) * 2 + random.uniform(0.5, 1.5)
+                wait_time = (attempt + 1) * 3 + random.uniform(1, 3)
                 logger.info(f"Retrying in {wait_time:.1f}s...")
                 time.sleep(wait_time)
                 
         except FileNotFoundError:
             logger.error("yt-dlp not found! Please install it: pip install yt-dlp")
             return None
-        except subprocess.TimeoutExpired:
-            logger.error(f"YouTube stream extraction timed out (attempt {attempt + 1})")
-            if attempt < max_retries - 1:
-                time.sleep(5)
-                continue
         except Exception as e:
             logger.error(f"Failed to get YouTube stream (attempt {attempt + 1}): {e}")
             if attempt < max_retries - 1:
@@ -490,7 +558,8 @@ def get_youtube_stream_url(youtube_url, max_retries=3):
             import traceback
             traceback.print_exc()
     
-    logger.error(f"Failed to extract YouTube stream after {max_retries} attempts")
+    logger.error(f"❌ Failed to extract YouTube stream after {max_retries} attempts with all strategies")
+    logger.info("💡 Tip: For production, consider using --cookies-from-browser or --cookies option with exported YouTube cookies")
     return None
 
 # ==================== TRAFFIC LIGHT DETECTION ====================
@@ -1686,8 +1755,11 @@ class MultiStreamManager:
         
         self.websocket_clients -= disconnected
     
-    def start_stream(self, stream_id: int, stream_url: str, save_output: bool = True) -> bool:
-        """Start a specific stream"""
+    def start_stream(self, stream_id: int, stream_url: str, save_output: bool = True, 
+                     source_type: Optional[str] = None, youtube_url: Optional[str] = None,
+                     file_path: Optional[str] = None, file_size_mb: Optional[float] = None,
+                     filename: Optional[str] = None, created_by: Optional[str] = None) -> bool:
+        """Start a specific stream with metadata tracking"""
         if stream_id in self.streams and self.streams[stream_id].processing:
             logger.warning(f"Stream {stream_id} already running")
             return False
@@ -1696,15 +1768,36 @@ class MultiStreamManager:
             logger.error(f"Stream ID {stream_id} exceeds maximum {Config.MAX_STREAMS}")
             return False
         
+        original_url = stream_url
+        detected_source_type = source_type
+        
+        # Detect source type if not provided
+        if not detected_source_type:
+            if 'youtube.com' in stream_url or 'youtu.be' in stream_url:
+                detected_source_type = 'youtube'
+            elif isinstance(stream_url, str) and os.path.isfile(stream_url):
+                detected_source_type = 'upload'
+            elif isinstance(stream_url, str) and stream_url.startswith('rtsp://'):
+                detected_source_type = 'rtsp'
+            elif isinstance(stream_url, str) and stream_url.startswith('http'):
+                detected_source_type = 'http'
+            elif isinstance(stream_url, (int, str)) and str(stream_url).isdigit():
+                detected_source_type = 'webcam'
+            else:
+                detected_source_type = 'unknown'
+        
         # Handle YouTube URLs
-        if 'youtube.com' in stream_url or 'youtu.be' in stream_url:
-            actual_url = get_youtube_stream_url(stream_url)
+        if detected_source_type == 'youtube':
+            youtube_url = original_url  # Store original YouTube URL
+            actual_url = get_youtube_stream_url(original_url)
             if not actual_url:
+                logger.error(f"Failed to extract YouTube stream URL for: {original_url}")
                 return False
             stream_url = actual_url
+            logger.info(f"YouTube URL extracted successfully, using stream URL")
         
         # Handle webcam
-        if stream_url.isdigit():
+        if detected_source_type == 'webcam' and isinstance(stream_url, str) and stream_url.isdigit():
             stream_url = int(stream_url)
         
         if stream_id not in self.streams:
@@ -1714,6 +1807,7 @@ class MultiStreamManager:
         self.streams[stream_id].processing = True
         
         # Setup video writer for output
+        output_path = None
         if save_output:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             output_file = Config.OUTPUT_DIR / f"stream{stream_id}_output_{timestamp}.mp4"
@@ -1723,13 +1817,28 @@ class MultiStreamManager:
                 (Config.INPUT_WIDTH, Config.INPUT_HEIGHT)
             )
             self.streams[stream_id].output_path = output_file
+            output_path = output_file
             logger.info(f"Output video will be saved to: {output_file}")
+        
+        # Store metadata in stream object for later database save
+        self.streams[stream_id].metadata = {
+            'source_type': detected_source_type,
+            'source_url': original_url if detected_source_type != 'youtube' else None,
+            'youtube_url': youtube_url,
+            'file_path': file_path or (stream_url if detected_source_type == 'upload' else None),
+            'file_size_mb': file_size_mb,
+            'filename': filename,
+            'created_by': created_by
+        }
         
         thread = threading.Thread(target=self._process_stream, args=(stream_id, stream_url), daemon=True)
         self.stream_threads[stream_id] = thread
         thread.start()
         
-        logger.info(f"Stream {stream_id} started")
+        # Note: Metadata will be saved by the API endpoint that calls this method
+        # This avoids asyncio issues from sync context
+        
+        logger.info(f"Stream {stream_id} started ({detected_source_type})")
         return True
     
     def stop_stream(self, stream_id: int):
@@ -1737,12 +1846,19 @@ class MultiStreamManager:
         if stream_id in self.streams:
             self.streams[stream_id].processing = False
             
+            # Get violation count before stopping
+            violation_count = sum(self.streams[stream_id].violation_counts.values())
+            output_path = self.streams[stream_id].output_path
+            
             # Release video writer
             if self.streams[stream_id].video_writer is not None:
                 self.streams[stream_id].video_writer.release()
-                logger.info(f"Video saved to: {self.streams[stream_id].output_path}")
+                logger.info(f"Video saved to: {output_path}")
             
-            logger.info(f"Stream {stream_id} stopped")
+            # Note: Database status update will be handled by the API endpoint
+            # This avoids asyncio issues from sync context
+            
+            logger.info(f"Stream {stream_id} stopped (violations: {violation_count})")
     
     def _process_stream(self, stream_id: int, stream_url: str):
         """Process video stream"""
@@ -2141,8 +2257,84 @@ async def clear_all_violations(current_user: dict = Depends(get_current_active_u
     result = await database.violations.delete_many({})
     return {"message": f"Deleted {result.deleted_count} violations"}
 
+async def save_stream_metadata(stream_id: int, source_type: str, source_url: Optional[str] = None,
+                                youtube_url: Optional[str] = None, file_path: Optional[str] = None,
+                                file_size_mb: Optional[float] = None, filename: Optional[str] = None,
+                                output_path: Optional[str] = None, created_by: Optional[str] = None):
+    """Save or update stream metadata in database"""
+    if database is None:
+        logger.warning("Database not available, skipping stream metadata save")
+        return None
+    
+    try:
+        stream_doc = {
+            "stream_id": stream_id,
+            "source_type": source_type,
+            "source_url": source_url,
+            "youtube_url": youtube_url,
+            "file_path": file_path,
+            "file_size_mb": file_size_mb,
+            "filename": filename,
+            "status": "running",
+            "started_at": datetime.utcnow(),
+            "stopped_at": None,
+            "output_path": str(output_path) if output_path else None,
+            "violation_count": 0,
+            "created_by": created_by
+        }
+        
+        # Use upsert to update if exists, insert if not
+        result = await database.streams.update_one(
+            {"stream_id": stream_id, "status": "running"},
+            {"$set": stream_doc},
+            upsert=True
+        )
+        logger.info(f"✅ Stream metadata saved for stream {stream_id} ({source_type})")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to save stream metadata: {e}")
+        return None
+
+async def update_stream_status(stream_id: int, status: str, output_path: Optional[str] = None,
+                               violation_count: Optional[int] = None):
+    """Update stream status in database"""
+    if database is None:
+        return None
+    
+    try:
+        update_data = {
+            "status": status,
+            "stopped_at": datetime.utcnow() if status == "stopped" else None
+        }
+        if output_path:
+            update_data["output_path"] = str(output_path)
+        if violation_count is not None:
+            update_data["violation_count"] = violation_count
+        
+        result = await database.streams.update_one(
+            {"stream_id": stream_id},
+            {"$set": update_data}
+        )
+        logger.info(f"✅ Stream {stream_id} status updated to: {status}")
+        return result
+    except Exception as e:
+        logger.error(f"Failed to update stream status: {e}")
+        return None
+
+async def get_stream_metadata(stream_id: int) -> Optional[dict]:
+    """Get stream metadata from database"""
+    if database is None:
+        return None
+    
+    try:
+        stream = await database.streams.find_one({"stream_id": stream_id}, sort=[("started_at", -1)])
+        return stream
+    except Exception as e:
+        logger.error(f"Failed to get stream metadata: {e}")
+        return None
+
 async def save_violation_to_db(violation_data: dict):
-    """Save violation to MongoDB database"""
+    """Save violation to MongoDB database and update stream violation count"""
     if database is None:
         return None
     
@@ -2163,6 +2355,15 @@ async def save_violation_to_db(violation_data: dict):
         
         result = await database.violations.insert_one(violation_doc)
         logger.info(f"Violation saved to DB: {result.inserted_id}")
+        
+        # Update stream violation count
+        stream_id = violation_data.get("stream_id")
+        if stream_id is not None:
+            await database.streams.update_one(
+                {"stream_id": stream_id, "status": "running"},
+                {"$inc": {"violation_count": 1}}
+            )
+        
         return str(result.inserted_id)
     except Exception as e:
         logger.error(f"Failed to save violation to DB: {e}")
@@ -2233,8 +2434,13 @@ async def health():
     }
 
 @app.post("/api/start-stream/{stream_id}")
-async def start_stream(stream_id: int, stream_url: str = Query(...), save_output: bool = Query(True)):
-    """Start a specific stream"""
+async def start_stream(
+    stream_id: int, 
+    stream_url: str = Query(...), 
+    save_output: bool = Query(True),
+    current_user: Optional[dict] = Depends(get_optional_user)
+):
+    """Start a specific stream with YouTube URL or other source"""
     if stream_id < 0 or stream_id >= Config.MAX_STREAMS:
         raise HTTPException(status_code=400, detail=f"Stream ID must be between 0 and {Config.MAX_STREAMS-1}")
     
@@ -2248,39 +2454,148 @@ async def start_stream(stream_id: int, stream_url: str = Query(...), save_output
     if is_youtube:
         logger.info("Detected YouTube URL, extracting stream...")
     
-    success = manager.start_stream(stream_id, stream_url, save_output)
+    # Get user email if authenticated
+    created_by = current_user.get("email") if current_user else None
+    
+    success = manager.start_stream(
+        stream_id=stream_id,
+        stream_url=stream_url,
+        save_output=save_output,
+        source_type='youtube' if is_youtube else None,
+        youtube_url=stream_url if is_youtube else None,
+        created_by=created_by
+    )
+    
     if success:
+        # Save metadata to database
+        await save_stream_metadata(
+            stream_id=stream_id,
+            source_type='youtube' if is_youtube else 'http',
+            source_url=stream_url if not is_youtube else None,
+            youtube_url=stream_url if is_youtube else None,
+            created_by=created_by
+        )
+        
         return {
             "status": "started",
             "stream_id": stream_id,
             "stream_url": stream_url,
             "save_output": save_output,
-            "is_youtube": is_youtube
+            "is_youtube": is_youtube,
+            "message": "Stream started successfully"
         }
     else:
         error_msg = "Failed to start stream"
         if is_youtube:
-            error_msg = "Failed to extract YouTube stream URL. Please check if yt-dlp is installed and the URL is valid."
+            error_msg = "Failed to extract YouTube stream URL. YouTube may be blocking requests. Try again later or use a different video source."
         raise HTTPException(status_code=400, detail=error_msg)
 
 @app.post("/api/stop-stream/{stream_id}")
 async def stop_stream(stream_id: int):
     """Stop a specific stream"""
+    # Get violation count and output path before stopping
+    violation_count = 0
+    output_path = None
+    if stream_id in manager.streams:
+        violation_count = sum(manager.streams[stream_id].violation_counts.values())
+        output_path = manager.streams[stream_id].output_path
+    
     manager.stop_stream(stream_id)
+    
+    # Update database status
+    await update_stream_status(
+        stream_id=stream_id,
+        status="stopped",
+        output_path=output_path,
+        violation_count=violation_count
+    )
+    
     return {
         "status": "stopped",
-        "stream_id": stream_id
+        "stream_id": stream_id,
+        "violation_count": violation_count,
+        "output_path": str(output_path) if output_path else None
     }
 
 @app.post("/api/stop-all-streams")
 async def stop_all_streams():
     """Stop all streams"""
+    stopped_streams = []
     for stream_id in list(manager.streams.keys()):
+        violation_count = sum(manager.streams[stream_id].violation_counts.values()) if stream_id in manager.streams else 0
+        output_path = manager.streams[stream_id].output_path if stream_id in manager.streams else None
         manager.stop_stream(stream_id)
-    return {"status": "all_streams_stopped"}
+        await update_stream_status(
+            stream_id=stream_id,
+            status="stopped",
+            output_path=output_path,
+            violation_count=violation_count
+        )
+        stopped_streams.append({
+            "stream_id": stream_id,
+            "violation_count": violation_count
+        })
+    return {"status": "all_streams_stopped", "stopped_streams": stopped_streams}
+
+@app.get("/api/stream-metadata/{stream_id}")
+async def get_stream_metadata_endpoint(stream_id: int):
+    """Get stream metadata from database"""
+    metadata = await get_stream_metadata(stream_id)
+    if not metadata:
+        raise HTTPException(status_code=404, detail=f"Stream {stream_id} metadata not found")
+    
+    # Convert ObjectId to string
+    if "_id" in metadata:
+        metadata["id"] = str(metadata["_id"])
+        del metadata["_id"]
+    
+    return metadata
+
+@app.get("/api/streams/history")
+async def get_streams_history(
+    limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0),
+    status: Optional[str] = None,
+    source_type: Optional[str] = None
+):
+    """Get stream history from database"""
+    if database is None:
+        raise HTTPException(status_code=503, detail="Database not available")
+    
+    try:
+        query = {}
+        if status:
+            query["status"] = status
+        if source_type:
+            query["source_type"] = source_type
+        
+        total = await database.streams.count_documents(query)
+        cursor = database.streams.find(query).sort("started_at", -1).skip(skip).limit(limit)
+        streams = await cursor.to_list(length=limit)
+        
+        # Convert ObjectIds to strings
+        for stream in streams:
+            if "_id" in stream:
+                stream["id"] = str(stream["_id"])
+                del stream["_id"]
+        
+        return {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "streams": streams
+        }
+    except Exception as e:
+        logger.error(f"Failed to get stream history: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to retrieve stream history: {str(e)}")
 
 @app.post("/api/upload-video/{stream_id}")
-async def upload_video(stream_id: int, file: UploadFile = File(...), save_output: bool = True):
+async def upload_video(
+    stream_id: int, 
+    file: UploadFile = File(...), 
+    save_output: bool = True,
+    current_user: Optional[dict] = Depends(get_optional_user)
+):
     """Upload video file for processing"""
     if stream_id < 0 or stream_id >= Config.MAX_STREAMS:
         raise HTTPException(status_code=400, detail=f"Stream ID must be between 0 and {Config.MAX_STREAMS-1}")
@@ -2303,9 +2618,13 @@ async def upload_video(stream_id: int, file: UploadFile = File(...), save_output
     MAX_FILE_SIZE_MB = 500
     MAX_FILE_SIZE_BYTES = MAX_FILE_SIZE_MB * 1024 * 1024
     
+    # Get user email if authenticated
+    created_by = current_user.get("email") if current_user else None
+    
     try:
         # Create unique filename
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        original_filename = file.filename or f"video{file_extension}"
         safe_filename = f"stream{stream_id}_{timestamp}{file_extension}"
         file_path = Config.UPLOADS_DIR / safe_filename
         
@@ -2313,7 +2632,7 @@ async def upload_video(stream_id: int, file: UploadFile = File(...), save_output
         Config.UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
         
         # Save uploaded file with chunked reading for large files
-        logger.info(f"Receiving uploaded file for stream {stream_id}: {file.filename}")
+        logger.info(f"Receiving uploaded file for stream {stream_id}: {original_filename}")
         file_size = 0
         chunk_size = 1024 * 1024  # 1MB chunks
         
@@ -2345,14 +2664,35 @@ async def upload_video(stream_id: int, file: UploadFile = File(...), save_output
         
         # Start processing the uploaded video
         logger.info(f"Starting stream processing for uploaded video: {file_path}")
-        success = manager.start_stream(stream_id, str(file_path), save_output)
+        success = manager.start_stream(
+            stream_id=stream_id,
+            stream_url=str(file_path),
+            save_output=save_output,
+            source_type='upload',
+            file_path=str(file_path),
+            file_size_mb=file_size_mb,
+            filename=original_filename,
+            created_by=created_by
+        )
         
         if success:
+            # Save metadata to database
+            await save_stream_metadata(
+                stream_id=stream_id,
+                source_type='upload',
+                source_url=str(file_path),
+                file_path=str(file_path),
+                file_size_mb=file_size_mb,
+                filename=original_filename,
+                created_by=created_by
+            )
+            
             return {
                 "status": "success",
                 "message": "Video uploaded and processing started",
                 "stream_id": stream_id,
                 "filename": safe_filename,
+                "original_filename": original_filename,
                 "size_mb": round(file_size_mb, 2),
                 "file_path": str(file_path)
             }
