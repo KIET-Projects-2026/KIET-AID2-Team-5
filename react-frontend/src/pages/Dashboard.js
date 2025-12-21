@@ -103,7 +103,8 @@ const Dashboard = () => {
                 ) : (
                   violations.map((v, index) => (
                     <tr key={index}>
-                      <td>Stream {v.stream_id}</td>
+                      <td>Stream {v.stream_id + 1}</td>
+
                       <td>{(v.violation_type || '').replace('_', ' ').toUpperCase()}</td>
                       <td>{formatSpeed(v.speed_kmh)}</td>
                       <td>{formatTime(v.timestamp)}</td>

@@ -339,22 +339,111 @@ const StreamCard = ({ streamId, isMain, onSwap, API_BASE_URL, getAuthHeaders, ST
   );
 };
 
+// const Monitoring = () => {
+//   const { getAuthHeaders } = useAuth();
+//   const { API_BASE_URL, STREAM_POLL_INTERVAL } = useConfig();
+//   const [mainStreamIndex, setMainStreamIndex] = useState(2);
+
+//   const handleSwapToMain = (streamIndex) => {
+//     if (streamIndex !== mainStreamIndex) {
+//       setMainStreamIndex(streamIndex);
+//       showToast(`Stream ${streamIndex + 1} moved to main view`, 'success');
+//     }
+//   };
+
+//   const smallStreams = [0, 1, 3].filter(i => i !== mainStreamIndex);
+//   if (!smallStreams.includes(mainStreamIndex) && mainStreamIndex !== 2) {
+//     smallStreams.push(mainStreamIndex);
+//   }
+
+//   return (
+//     <div className="dashboard-body">
+//       <Navbar isDashboard={true} />
+
+//       <div className="dashboard-main">
+//         <section className="content-section">
+//           <div className="section-header">
+//             <h2 className="section-title">
+//               <i className="fas fa-satellite"></i>
+//               Stream Configuration & Live Feed
+//             </h2>
+//           </div>
+
+//           <div className="monitoring-layout">
+//             <div className="small-streams-panel">
+//               {[0, 1, 3].map(streamId => (
+//                 streamId !== mainStreamIndex && (
+//                   <StreamCard
+//                     key={streamId}
+//                     streamId={streamId}
+//                     isMain={false}
+//                     onSwap={handleSwapToMain}
+//                     API_BASE_URL={API_BASE_URL}
+//                     getAuthHeaders={getAuthHeaders}
+//                     STREAM_POLL_INTERVAL={STREAM_POLL_INTERVAL}
+//                   />
+//                 )
+//               ))}
+//             </div>
+
+//             <div className="big-stream-panel">
+//               <StreamCard
+//                 key={`main-${mainStreamIndex}`}
+//                 streamId={mainStreamIndex}
+//                 isMain={true}
+//                 onSwap={() => {}}
+//                 API_BASE_URL={API_BASE_URL}
+//                 getAuthHeaders={getAuthHeaders}
+//                 STREAM_POLL_INTERVAL={STREAM_POLL_INTERVAL}
+//               />
+//             </div>
+//           </div>
+//         </section>
+//       </div>
+
+//       <Footer />
+//     </div>
+//   );
+// };
+
 const Monitoring = () => {
   const { getAuthHeaders } = useAuth();
   const { API_BASE_URL, STREAM_POLL_INTERVAL } = useConfig();
-  const [mainStreamIndex, setMainStreamIndex] = useState(2);
 
-  const handleSwapToMain = (streamIndex) => {
-    if (streamIndex !== mainStreamIndex) {
-      setMainStreamIndex(streamIndex);
-      showToast(`Stream ${streamIndex + 1} moved to main view`, 'success');
-    }
+  /**
+   * SOURCE OF TRUTH
+   * Index 2 is ALWAYS the main stream (matches script.js)
+   */
+  const MAIN_INDEX = 2;
+
+  const [streams, setStreams] = useState([
+    { id: 0 },
+    { id: 1 },
+    { id: 2 }, // MAIN by default
+    { id: 3 }
+  ]);
+
+  /**
+   * Swap clicked stream with main stream
+   * React-safe equivalent of DOM swap in script.js
+   */
+  const handleSwapToMain = (clickedStreamId) => {
+    const clickedIndex = streams.findIndex(s => s.id === clickedStreamId);
+    if (clickedIndex === -1 || clickedIndex === MAIN_INDEX) return;
+
+    setStreams(prev => {
+      const updated = [...prev];
+
+      // Swap stream objects
+      const temp = updated[MAIN_INDEX];
+      updated[MAIN_INDEX] = updated[clickedIndex];
+      updated[clickedIndex] = temp;
+
+      return updated;
+    });
+
+    showToast(`Stream ${clickedStreamId + 1} moved to main view`, 'success');
   };
-
-  const smallStreams = [0, 1, 3].filter(i => i !== mainStreamIndex);
-  if (!smallStreams.includes(mainStreamIndex) && mainStreamIndex !== 2) {
-    smallStreams.push(mainStreamIndex);
-  }
 
   return (
     <div className="dashboard-body">
@@ -370,26 +459,30 @@ const Monitoring = () => {
           </div>
 
           <div className="monitoring-layout">
+            {/* SMALL STREAMS */}
             <div className="small-streams-panel">
-              {[0, 1, 3].map(streamId => (
-                streamId !== mainStreamIndex && (
+              {streams.map((stream, index) => {
+                if (index === MAIN_INDEX) return null;
+
+                return (
                   <StreamCard
-                    key={streamId}
-                    streamId={streamId}
+                    key={stream.id}                // ✅ stable identity
+                    streamId={stream.id}
                     isMain={false}
                     onSwap={handleSwapToMain}
                     API_BASE_URL={API_BASE_URL}
                     getAuthHeaders={getAuthHeaders}
                     STREAM_POLL_INTERVAL={STREAM_POLL_INTERVAL}
                   />
-                )
-              ))}
+                );
+              })}
             </div>
 
+            {/* MAIN STREAM */}
             <div className="big-stream-panel">
               <StreamCard
-                key={`main-${mainStreamIndex}`}
-                streamId={mainStreamIndex}
+                key={streams[MAIN_INDEX].id}
+                streamId={streams[MAIN_INDEX].id}
                 isMain={true}
                 onSwap={() => {}}
                 API_BASE_URL={API_BASE_URL}
@@ -405,5 +498,6 @@ const Monitoring = () => {
     </div>
   );
 };
+
 
 export default Monitoring;

@@ -101,8 +101,7 @@ const Analytics = () => {
   const violationsByStreamData = () => {
     const streamCounts = {};
     violations.forEach(v => {
-      const key = `Stream ${v.stream_id}`;
-      streamCounts[key] = (streamCounts[key] || 0) + 1;
+      const key = `Stream ${v.stream_id + 1}`;      streamCounts[key] = (streamCounts[key] || 0) + 1;
     });
 
     return {
@@ -292,7 +291,8 @@ const Analytics = () => {
                 ) : (
                   currentViolations.map((v, index) => (
                     <tr key={index}>
-                      <td>Stream {v.stream_id}</td>
+                      <td>Stream {v.stream_id + 1}</td>
+
                       <td>{(v.violation_type || '').replace('_', ' ').toUpperCase()}</td>
                       <td>{formatSpeed(v.speed_kmh)}</td>
                       <td>{v.signal_state || 'N/A'}</td>
