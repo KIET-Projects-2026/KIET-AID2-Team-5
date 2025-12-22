@@ -445,6 +445,50 @@ const Monitoring = () => {
     showToast(`Stream ${clickedStreamId + 1} moved to main view`, 'success');
   };
 
+  // WebSocket for real-time violation notifications
+  useEffect(() => {
+    const wsProtocol = API_BASE_URL.startsWith('https') ? 'wss' : 'ws';
+    const wsHost = new URL(API_BASE_URL).host;
+    const wsUrl = `${wsProtocol}://${wsHost}/ws`;
+
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      console.log('WebSocket connected for violations');
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'violation') {
+          const { data } = message;
+          const violationType = data.violation_type.replace('_', ' ').toUpperCase();
+          showToast(`Violation detected on Stream ${data.stream_id + 1}: ${violationType}`, 'error');
+          
+          // Play sound alert
+          const audio = new Audio('https://www.soundjay.com/buttons/beep-07a.mp3');
+          audio.play().catch(error => {
+            console.error('Error playing sound:', error);
+          });
+        }
+      } catch (error) {
+        console.error('Error parsing WebSocket message:', error);
+      }
+    };
+
+    ws.onclose = () => {
+      console.log('WebSocket disconnected');
+    };
+
+    ws.onerror = (error) => {
+      console.error('WebSocket error:', error);
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, [API_BASE_URL]);
+
   return (
     <div className="dashboard-body">
       <Navbar isDashboard={true} />
