@@ -1,0 +1,81 @@
+import React, { createContext, useState, useContext, useEffect } from 'react';
+
+const ConfigContext = createContext();
+
+export const useConfig = () => {
+  const context = useContext(ConfigContext);
+  if (!context) {
+    throw new Error('useConfig must be used within a ConfigProvider');
+  }
+  return context;
+};
+
+export const ConfigProvider = ({ children }) => {
+  const [config, setConfig] = useState({
+    API_BASE_URL: 'http://localhost:8000',
+    WS_BASE_URL: 'ws://localhost:8000',
+    POLL_INTERVAL: 2000,
+    STREAM_POLL_INTERVAL: 1000,
+    CONFIG_LOADED: false
+  });
+
+  const isLocalEnvironment = () => {
+    const hostname = window.location.hostname;
+    return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '';
+  };
+
+  useEffect(() => {
+    loadConfig();
+  }, []);
+
+  const loadConfig = async () => {
+    try {
+      const configUrl = isLocalEnvironment() 
+        ? 'http://localhost:8000/api/config' 
+        : '/api/config';
+      
+      console.log('🔧 Loading config from:', configUrl);
+      
+      const response = await fetch(configUrl, {
+        method: 'GET',
+        cache: 'no-cache'
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        setConfig({
+          API_BASE_URL: data.api_base_url,
+          WS_BASE_URL: data.ws_base_url,
+          POLL_INTERVAL: data.poll_intervals?.stats || 2000,
+          STREAM_POLL_INTERVAL: data.poll_intervals?.stream_frame || 1000,
+          CONFIG_LOADED: true
+        });
+        console.log('✅ Config loaded from backend:', data);
+      } else {
+        throw new Error(`Config endpoint returned ${response.status}`);
+      }
+    } catch (error) {
+      console.warn('⚠️ Failed to load config from backend, using auto-detection:', error.message);
+      
+      if (isLocalEnvironment()) {
+        setConfig(prev => ({
+          ...prev,
+          API_BASE_URL: 'http://localhost:8000',
+          WS_BASE_URL: 'ws://localhost:8000',
+          CONFIG_LOADED: true
+        }));
+        console.log('🏠 Detected local environment');
+      } else {
+        setConfig(prev => ({
+          ...prev,
+          API_BASE_URL: 'https://traffic-monitoring-api.onrender.com',
+          WS_BASE_URL: 'wss://traffic-monitoring-api.onrender.com',
+          CONFIG_LOADED: true
+        }));
+        console.log('☁️ Detected production environment');
+      }
+    }
+  };
+
+  return <ConfigContext.Provider value={config}>{children}</ConfigContext.Provider>;
+};
